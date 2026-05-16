@@ -39,6 +39,7 @@ export const BLOCK_TYPES = [
   { type:'menu',       label:'Меню',           icon:'≡',  color:'#8b5cf6', group:'Основные',   canBeRoot:false, canStack:true  },
   // Логика
   { type:'condition',  label:'Если',           icon:'◇',  color:'#fb923c', group:'Логика',     canBeRoot:false, canStack:true  },
+  { type:'condition_not', label:'Если не',       icon:'◈',  color:'#f472b6', group:'Логика',     canBeRoot:false, canStack:true  },
   { type:'else',       label:'Иначе',          icon:'⎇',  color:'#f97316', group:'Логика',     canBeRoot:false, canStack:true  },
   { type:'switch',     label:'Переключатель',  icon:'⇄',  color:'#f59e0b', group:'Логика',     canBeRoot:false, canStack:true  },
   { type:'ask',        label:'Спросить',       icon:'?',  color:'#f87171', group:'Логика',     canBeRoot:false, canStack:true  },
@@ -94,7 +95,7 @@ export const BLOCK_TYPES = [
 const TERMINAL_CHILDREN = [];
 const UI_ATTACHMENT_LEGACY_BLOCK_TYPES = new Set(['buttons', 'inline', 'inline_db']);
 const FLOW_CHILDREN = [
-  'message', 'typing', 'delay', 'condition', 'else', 'switch', 'ask', 'remember',
+  'message', 'typing', 'delay', 'condition', 'condition_not', 'else', 'switch', 'ask', 'remember',
   'get', 'save', 'random', 'loop', 'http', 'log', 'notify', 'broadcast', 'role',
   'payment', 'analytics', 'photo', 'video', 'audio', 'document', 'send_file',
   'sticker', 'contact', 'location', 'poll', 'database', 'classify', 'use',
@@ -102,7 +103,7 @@ const FLOW_CHILDREN = [
   'db_delete', 'save_global', 'set_global', 'get_user', 'all_keys',
 ];
 const FLOW_NO_MEDIA = [
-  'message', 'typing', 'delay', 'condition', 'switch', 'ask', 'remember', 'get',
+  'message', 'typing', 'delay', 'condition', 'condition_not', 'switch', 'ask', 'remember', 'get',
   'save', 'random', 'loop', 'http', 'log', 'stop', 'goto', 'use', 'call_block',
   'set_global',
 ];
@@ -115,7 +116,7 @@ const CAN_STACK_BELOW = {
   global: TERMINAL_CHILDREN,
   block: FLOW_CHILDREN,
   use: FLOW_CHILDREN,
-  call_block: ['message', 'remember', 'save', 'condition', 'log', 'stop', 'goto', 'use'],
+  call_block: ['message', 'remember', 'save', 'condition', 'condition_not', 'log', 'stop', 'goto', 'use'],
 
   start: FLOW_CHILDREN,
   command: FLOW_CHILDREN,
@@ -139,49 +140,50 @@ const CAN_STACK_BELOW = {
   reply: [...FLOW_CHILDREN, ...TEXT_ATTACHMENTS],
   caption: [...FLOW_CHILDREN, ...TEXT_ATTACHMENTS],
   buttons: FLOW_CHILDREN,
-  inline: ['message', 'condition', 'stop', 'goto'],
-  inline_db: ['message', 'condition', 'stop', 'goto'],
-  menu: ['message', 'condition', 'stop', 'goto', 'use'],
+  inline: ['message', 'condition', 'condition_not', 'stop', 'goto'],
+  inline_db: ['message', 'condition', 'condition_not', 'stop', 'goto'],
+  menu: ['message', 'condition', 'condition_not', 'stop', 'goto', 'use'],
 
   condition: FLOW_CHILDREN,
+  condition_not: FLOW_CHILDREN,
   else: FLOW_CHILDREN,
   switch: FLOW_CHILDREN,
-  ask: ['message', 'remember', 'get', 'save', 'condition', 'http', 'log', 'notify', 'stop', 'goto', 'use'],
+  ask: ['message', 'remember', 'get', 'save', 'condition', 'condition_not', 'http', 'log', 'notify', 'stop', 'goto', 'use'],
   remember: [...FLOW_NO_MEDIA, 'notify'],
   get: FLOW_NO_MEDIA,
   save: FLOW_NO_MEDIA,
-  random: ['message', 'typing', 'delay', 'condition', 'goto', 'stop', 'use', 'log'],
+  random: ['message', 'typing', 'delay', 'condition', 'condition_not', 'goto', 'stop', 'use', 'log'],
   loop: FLOW_CHILDREN,
 
-  http: ['message', 'remember', 'save', 'condition', 'log', 'stop', 'goto', 'use'],
-  delay: ['message', 'typing', 'condition', 'ask', 'remember', 'get', 'save', 'http', 'log', 'stop', 'goto', 'use'],
-  typing: ['message', 'photo', 'video', 'audio', 'document', 'send_file', 'sticker', 'condition', 'ask', 'delay', 'stop', 'goto', 'use'],
+  http: ['message', 'remember', 'save', 'condition', 'condition_not', 'log', 'stop', 'goto', 'use'],
+  delay: ['message', 'typing', 'condition', 'condition_not', 'ask', 'remember', 'get', 'save', 'http', 'log', 'stop', 'goto', 'use'],
+  typing: ['message', 'photo', 'video', 'audio', 'document', 'send_file', 'sticker', 'condition', 'condition_not', 'ask', 'delay', 'stop', 'goto', 'use'],
   stop: TERMINAL_CHILDREN,
   goto: TERMINAL_CHILDREN,
   log: [...FLOW_NO_MEDIA, 'notify'],
   notify: ['message', 'typing', 'delay', 'stop', 'goto', 'log'],
   database: ['message', 'remember', 'get', 'save', 'condition', 'log', 'stop', 'goto', 'use'],
-  payment: ['message', 'condition', 'stop', 'goto', 'log'],
+  payment: ['message', 'condition', 'condition_not', 'stop', 'goto', 'log'],
   analytics: ['message', 'stop', 'goto', 'log'],
-  classify: ['message', 'condition', 'stop', 'goto', 'use', 'log'],
-  role: ['message', 'condition', 'stop', 'goto', 'use', 'log'],
+  classify: ['message', 'condition', 'condition_not', 'stop', 'goto', 'use', 'log'],
+  role: ['message', 'condition', 'condition_not', 'stop', 'goto', 'use', 'log'],
 
-  photo: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  video: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  audio: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  document: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  send_file: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  sticker: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  contact: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  location: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
-  poll: ['message', 'typing', 'delay', 'condition', 'ask', 'stop', 'goto', 'use', 'log'],
+  photo: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  video: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  audio: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  document: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  send_file: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  sticker: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  contact: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  location: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
+  poll: ['message', 'typing', 'delay', 'condition', 'condition_not', 'ask', 'stop', 'goto', 'use', 'log'],
 
-  scenario: ['step', 'message', 'typing', 'delay', 'condition', 'switch', 'ask', 'remember', 'get', 'save', 'random', 'loop', 'http', 'log', 'stop', 'goto', 'use'],
-  step: ['message', 'typing', 'delay', 'condition', 'switch', 'ask', 'remember', 'get', 'save', 'random', 'loop', 'http', 'log', 'stop', 'goto', 'use', 'step'],
+  scenario: ['step', 'message', 'typing', 'delay', 'condition', 'condition_not', 'switch', 'ask', 'remember', 'get', 'save', 'random', 'loop', 'http', 'log', 'stop', 'goto', 'use'],
+  step: ['message', 'typing', 'delay', 'condition', 'condition_not', 'switch', 'ask', 'remember', 'get', 'save', 'random', 'loop', 'http', 'log', 'stop', 'goto', 'use', 'step'],
 
-  check_sub: ['message', 'condition', 'stop', 'goto', 'use', 'log'],
-  member_role: ['message', 'condition', 'remember', 'save', 'stop', 'goto', 'log'],
-  forward_msg: ['message', 'condition', 'stop', 'goto', 'log'],
+  check_sub: ['message', 'condition', 'condition_not', 'stop', 'goto', 'use', 'log'],
+  member_role: ['message', 'condition', 'condition_not', 'remember', 'save', 'stop', 'goto', 'log'],
+  forward_msg: ['message', 'condition', 'condition_not', 'stop', 'goto', 'log'],
   broadcast: ['message', 'stop', 'goto', 'log'],
 
   db_delete: [...FLOW_NO_MEDIA, 'notify'],
@@ -377,7 +379,7 @@ function snapAttachRejectHint(parentType, childType, ui) {
 
 // Порядок подсказки «что поставить ниже» — сначала самые нужные новичку
 const NEXT_BLOCK_PRIORITY = [
-  'message', 'buttons', 'inline', 'inline_db', 'condition', 'else', 'ask', 'remember', 'use',
+  'message', 'buttons', 'inline', 'inline_db', 'condition', 'condition_not', 'else', 'ask', 'remember', 'use',
   'typing', 'delay', 'get', 'save', 'random', 'photo', 'video', 'stop', 'goto',
   'log', 'loop', 'switch', 'http', 'menu', 'poll', 'document', 'send_file', 'audio', 'sticker',
   'contact', 'location', 'notify', 'broadcast', 'database', 'classify', 'role', 'payment', 'analytics',
@@ -425,6 +427,7 @@ const BEGINNER_GUIDE = {
   inline_db: 'Создаёт inline-кнопки из списка в БД: по одной кнопке на категорию/запись и последней строкой кнопку «Назад».',
   menu: 'Упрощённое меню из пунктов; часто перед переходами.',
   condition: 'Ветка если условие истинно. После можно добавить «Иначе» на том же уровне.',
+  condition_not: 'Ветка если условие ложно (в коде: «если … не == …»). После можно добавить «Иначе».',
   else: 'Ветка «во всех остальных случаях». Ставь сразу под связанным «Если».',
   switch: 'Много вариантов по значению переменной (аналог switch).',
   ask: 'Бот задаёт вопрос и ждёт ответа пользователя; дальнейшие блоки идут после ввода.',
@@ -483,108 +486,8 @@ function getBeginnerPanelHint(block, opts = {}) {
   const props = block.props || {};
   // Special UI for `location` block: latitude/longitude + map picker
   if (block.type === 'location') {
-    const [mapActive, setMapActive] = React.useState(false);
-    const mapContainerRef = React.useRef(null);
-    const mapRef = React.useRef(null);
-    const markerRef = React.useRef(null);
-
-    const latVal = props.latitude || '';
-    const lngVal = props.longitude || '';
-    const showMapUi = ((fields || []).some(f => f.key === 'latitude' || f.key === 'longitude') || ['location','send_location','location_received'].includes(block.type));
-
-    async function ensureLeafletLoaded() {
-      if (typeof window.L !== 'undefined') return;
-      // load CSS
-      if (!document.querySelector('link[data-leaflet]')) {
-        const lnk = document.createElement('link');
-        lnk.rel = 'stylesheet';
-        lnk.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
-        lnk.setAttribute('data-leaflet', '1');
-        document.head.appendChild(lnk);
-      }
-      if (!document.querySelector('script[data-leaflet]')) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-          s.setAttribute('data-leaflet', '1');
-          s.onload = resolve;
-          s.onerror = reject;
-          document.body.appendChild(s);
-        });
-      }
-    }
-
-    async function initMapOnce() {
-      if (mapRef.current) return;
-      await ensureLeafletLoaded();
-      const container = mapContainerRef.current;
-      if (!container) return;
-      const L = window.L;
-      // default center: Kyiv
-      mapRef.current = L.map(container).setView([50.4501, 30.5234], 10);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap',
-        maxZoom: 19,
-      }).addTo(mapRef.current);
-
-      mapRef.current.on('click', (e) => {
-        const lat = e.latlng.lat.toFixed(6);
-        const lng = e.latlng.lng.toFixed(6);
-        onChange('latitude', lat);
-        onChange('longitude', lng);
-        if (markerRef.current) mapRef.current.removeLayer(markerRef.current);
-        markerRef.current = L.marker([lat, lng]).addTo(mapRef.current);
-        mapRef.current.flyTo([lat, lng], 14);
-      });
-
-      // If props already have coords show marker
-      if (latVal && lngVal) {
-        markerRef.current = window.L.marker([latVal, lngVal]).addTo(mapRef.current);
-        mapRef.current.setView([latVal, lngVal], 14);
-      }
-    }
-
-    React.useEffect(() => {
-      if (mapActive) {
-        // give container a moment to render
-        setTimeout(() => { initMapOnce().catch(() => {}); }, 100);
-      }
-      // cleanup on unmount
-      return () => {
-        if (mapRef.current) {
-          try { mapRef.current.remove(); } catch (e) {}
-          mapRef.current = null;
-          markerRef.current = null;
-        }
-      };
-    }, [mapActive]);
-
-    return (
-      <div style={{ overflowY: 'auto', flex: 1, padding: '10px 12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-          <span style={{ fontSize: 14 }}>{def?.icon}</span>
-          <span style={{ fontSize: 12, fontWeight: 700, color: def?.color }}>{def?.label}</span>
-        </div>
-
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 3, textTransform: 'uppercase' }}>Широта (Latitude)</div>
-          <input value={latVal} readOnly />
-        </div>
-
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 3, textTransform: 'uppercase' }}>Долгота (Longitude)</div>
-          <input value={lngVal} readOnly />
-        </div>
-
-        <div style={{ marginBottom: 8 }}>
-          <button className="btn-map" type="button" onClick={() => setMapActive((v) => !v)} style={{ padding: '10px 14px', background: '#ff8c42', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
-            {mapActive ? 'Закрыть карту' : 'Выбрать на карте'}
-          </button>
-        </div>
-
-        <div id={`map-container-${block.id}`} ref={mapContainerRef} style={{ height: mapActive ? 360 : 0, transition: 'height .2s', overflow: 'hidden', borderRadius: 8 }} />
-      </div>
-    );
+    // Location hint is currently rendered as a simple text hint in the beginner guide.
+    // Avoid using hooks inside this helper function.
   }
   const parts = [];
   const base = guide[bt];
@@ -633,6 +536,7 @@ const DEFAULT_PROPS = {
   command:    { cmd: 'start' },
   callback:   { label: 'Кнопка' },
   condition:  { cond: 'текст == "да"' },
+  condition_not:  { cond: 'текст == "да"' },
   switch:     { varname: 'текст', cases: 'да\nнет' },
   ask:        { question: 'Как вас зовут?', varname: 'имя' },
   remember:   { varname: 'счёт', value: '0' },
@@ -918,6 +822,7 @@ const FIELDS = {
   callback:  [{ key:'label',     label:'текст кнопки',     tag:'input' },
               { key:'return',    label:'вернуть после (true/false)', tag:'input' }],
   condition: [{ key:'cond',      label:'условие',           tag:'input' }],
+  condition_not: [{ key:'cond',      label:'условие (будет отрицано)', tag:'input' }],
   else:      [],
   switch:    [{ key:'varname',   label:'переменная',        tag:'input' },
               { key:'cases',     label:'значения (каждое с новой строки)', tag:'textarea', rows:3 }],
@@ -1110,7 +1015,8 @@ function inferPropsFromParent(parentBlock, newType, allBlocksInStack) {
     }
 
     // ── Условие: строим условие из переменной родителя ───────────────────────
-    case 'condition': {
+    case 'condition':
+    case 'condition_not': {
       if (parentType === 'ask') {
         return { cond: `${p.varname || 'ответ'} == ""` };
       }
@@ -1194,6 +1100,7 @@ function getPreview(type, props) {
     case 'command':    return `"/${p.cmd||'start'}"`;
     case 'callback':   return `"${p.label||'Кнопка'}"`;
     case 'condition':  return p.cond?.slice(0,28)||'';
+    case 'condition_not':  return p.cond ? `не ${p.cond}`.slice(0, 28) : '';
     case 'else':       return 'иначе';
     case 'switch':     return `${p.varname||'текст'}: ...`;
     case 'ask':        return `"${(p.question||'').slice(0,24)}"`;
@@ -1310,6 +1217,7 @@ const BLOCK_NOTES = {
   goto:     { icon: '↩️', color: '#a3a3a3', text: 'Блок «Переход» передаёт управление другому сценарию. После него блоки не выполняются.' },
   ask:      { icon: '💡', color: '#60a5fa', text: 'Бот ждёт ввода от пользователя. Следующий шаг выполнится только после его ответа.' },
   condition:{ icon: '💡', color: '#60a5fa', text: 'После «Если» можно добавить «Иначе» для обработки альтернативной ветки.' },
+  condition_not:{ icon: '💡', color: '#f472b6', text: 'После «Если не» можно добавить «Иначе» для альтернативной ветки.' },
   http:     { icon: '💡', color: '#60a5fa', text: 'Укажи «переменная →» чтобы сохранить ответ сервера и использовать его в следующих блоках.' },
   remember: { icon: '💡', color: '#60a5fa', text: 'Значение хранится только в рамках текущей сессии пользователя.' },
   save:     { icon: '💡', color: '#60a5fa', text: 'Ключ — имя записи в БД, например имя_пользователя. Значение — переменная или текст, который нужно сохранить.' },
@@ -1613,6 +1521,14 @@ function BlockInfoModal({ block, onClose }) {
   const type = block?.type;
   const def = getBlockDef(type, blockTypes);
   const addBlock = React.useContext(AddBlockContext);
+
+  React.useEffect(() => {
+    if (!def || !type) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, def, type]);
+
   if (!def || !type) return null;
   const color = def.color;
   const note = blockNoteForLang(lang, type, BLOCK_NOTES[type]);
@@ -1622,12 +1538,6 @@ function BlockInfoModal({ block, onClose }) {
     ui,
     lang,
   });
-
-  React.useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   return (
     <div
@@ -1718,6 +1628,8 @@ function BlockInfoModal({ block, onClose }) {
 /** newBlockDrop: 'valid' | 'invalid' | null — подсветка при перетаскивании блока с палитры */
 function BlockStack({ stack, selectedId, attentionBlockId, onSelectBlock, onDeleteBlock, onDragStack, onAddFooterAction, isDragTarget, newBlockDrop, newBlockDropHint }) {
   const ui = React.useContext(BuilderUiContext)?.t || getConstructorStrings('ru');
+  const dragStartRef = React.useRef(null);
+  
   return (
     <div
       style={{
@@ -1737,13 +1649,22 @@ function BlockStack({ stack, selectedId, attentionBlockId, onSelectBlock, onDele
       onMouseDown={e => {
         if (e.target.tagName === 'BUTTON') return;
         e.stopPropagation();
-        onDragStack(stack.id, e);
+        dragStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
       }}
-      onTouchStart={e => {
-        if (e.target.tagName === 'BUTTON') return;
-        e.stopPropagation();
-        const touch = e.touches[0];
-        onDragStack(stack.id, { clientX: touch.clientX, clientY: touch.clientY });
+      onMouseMove={e => {
+        if (!dragStartRef.current) return;
+        const dx = e.clientX - dragStartRef.current.x;
+        const dy = e.clientY - dragStartRef.current.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          onDragStack(stack.id, { clientX: dragStartRef.current.x, clientY: dragStartRef.current.y });
+          dragStartRef.current = null;
+        }
+      }}
+      onMouseUp={() => {
+        dragStartRef.current = null;
+      }}
+      onMouseLeave={() => {
+        dragStartRef.current = null;
       }}
     >
       {stack.blocks.map((block, i) => (
@@ -1985,7 +1906,7 @@ function resolvePickerInsertForKind(kind, targetBlock) {
       return null;
     }
     case 'condition_cond': {
-      if (t === 'condition') {
+      if (t === 'condition' || t === 'condition_not') {
         const c = String(p.cond || '').trim().replace(/:?\s*$/, '');
         return c || null;
       }
@@ -2043,7 +1964,7 @@ function getPropsFieldPickerKind(blockType, fieldKey) {
   if ((blockType === 'save' || blockType === 'save_global') && fieldKey === 'key') return 'save_key';
   if ((blockType === 'save' || blockType === 'save_global') && fieldKey === 'value') return 'save_value';
   if (blockType === 'set_global' && (fieldKey === 'varname' || fieldKey === 'value')) return fieldKey === 'varname' ? 'save_key' : 'save_value';
-  if (blockType === 'condition' && fieldKey === 'cond') return 'condition_cond';
+  if ((blockType === 'condition' || blockType === 'condition_not') && fieldKey === 'cond') return 'condition_cond';
   if (blockType === 'goto' && fieldKey === 'target') return 'goto_target';
   if ((blockType === 'use' || blockType === 'call_block') && fieldKey === 'blockname') return 'use_blockname';
   if (blockType === 'forward_msg' && fieldKey === 'target') return 'forward_target';
@@ -2353,13 +2274,15 @@ function MarkupFormattingExamples({ markup, lang }) {
   );
 }
 
-async function uploadBotMediaFile(file) {
+async function uploadBotMediaFile(file, projectId = '') {
+  const headers = {
+    'Content-Type': file.type || 'application/octet-stream',
+    'x-file-name': encodeURIComponent(file.name || 'file'),
+  };
+  if (projectId) headers['x-project-id'] = String(projectId);
   const data = await apiFetch('/api/media-upload', {
     method: 'POST',
-    headers: {
-      'Content-Type': file.type || 'application/octet-stream',
-      'x-file-name': encodeURIComponent(file.name || 'file'),
-    },
+    headers,
     body: file,
   });
   if (!data?.fileName || !data?.filePath) throw new Error(data?.error || 'upload_failed');
@@ -2371,7 +2294,16 @@ function displayMediaValue(value) {
   return s.includes('/uploads/media/') || (s.includes('/bots/') && s.includes('/media/')) ? s.split('/').pop() : s;
 }
 
-function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, stacks }) {
+function PropsPanel({
+  block,
+  onChange,
+  onAttachmentChange,
+  onAttachmentDelete,
+  stacks,
+  projectId = '',
+  isProjectMode = false,
+  hasActiveProSubscription = false,
+}) {
   const ctx = React.useContext(BuilderUiContext);
   const filePickerRef = React.useRef(null);
   const onChangeRef = React.useRef(onChange);
@@ -2399,13 +2331,13 @@ function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, s
     const file = event.target.files?.[0];
     if (!file || !pendingUploadField) return;
     try {
-      const uploaded = await uploadBotMediaFile(file);
+      const uploaded = await uploadBotMediaFile(file, isProjectMode ? projectId : '');
       onChangeRef.current(pendingUploadField, uploaded.filePath);
       if (pendingUploadField === 'url') onChangeRef.current('filename', uploaded.fileName || file.name || '');
     } catch (err) {
       alert('Не удалось загрузить файл: ' + (err?.message || 'ошибка'));
     }
-  }, [pendingUploadField]);
+  }, [pendingUploadField, isProjectMode, projectId]);
   const lang = ctx?.lang || 'ru';
   const blockTypes = ctx?.blockTypes || BLOCK_TYPES;
   const ui = ctx?.t || getConstructorStrings('ru');
@@ -2414,49 +2346,37 @@ function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, s
     [stacks, blockTypes],
   );
   const buttonOptions = React.useMemo(() => collectReplyButtonOptions(stacks), [stacks]);
+  const showMapUi = block?.type === 'location';
+  const locationProps = block?.type === 'location' ? (block.props || {}) : null;
 
-  if (!block) return (
-    <div style={{
-      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: 'var(--text3)', fontSize: 11, padding: 16, textAlign: 'center',
-    }}>
-      {ui.propsPickLine1}<br />{ui.propsPickLine2}
-    </div>
-  );
-  const def = getBlockDef(block.type, blockTypes);
-  const fields = localizedPropFields(block.type, lang, FIELDS[block.type] || []);
-  const props = block.props || {};
-  const showLocalUpload = block.type === 'photo' || block.type === 'document' || block.type === 'send_file';
-  const uploadFieldKey = block.type === 'send_file' ? 'file' : 'url';
-
-  // Helper: dynamically load Leaflet when needed
-  async function ensureLeafletLoaded() {
-    if (typeof window === 'undefined') return;
-    if (window.L) return;
-    if (!document.querySelector('link[data-leaflet]')) {
-      const lnk = document.createElement('link');
-      lnk.rel = 'stylesheet';
-      lnk.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
-      lnk.setAttribute('data-leaflet', '1');
-      document.head.appendChild(lnk);
-    }
-    if (!document.querySelector('script[data-leaflet]')) {
-      await new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-        s.setAttribute('data-leaflet', '1');
-        s.onload = resolve;
-        s.onerror = reject;
-        document.body.appendChild(s);
-      });
-    }
-  }
-
-  // Initialize map when activated
+  // Must run on every render (before early returns) — otherwise selecting any block crashes React.
   React.useEffect(() => {
     let mounted = true;
+
+    async function ensureLeafletLoaded() {
+      if (typeof window === 'undefined') return;
+      if (window.L) return;
+      if (!document.querySelector('link[data-leaflet]')) {
+        const lnk = document.createElement('link');
+        lnk.rel = 'stylesheet';
+        lnk.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+        lnk.setAttribute('data-leaflet', '1');
+        document.head.appendChild(lnk);
+      }
+      if (!document.querySelector('script[data-leaflet]')) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+          s.setAttribute('data-leaflet', '1');
+          s.onload = resolve;
+          s.onerror = reject;
+          document.body.appendChild(s);
+        });
+      }
+    }
+
     async function init() {
-      if (!mapActive || mapRef.current || typeof window === 'undefined') return;
+      if (!mapActive || !showMapUi || mapRef.current || typeof window === 'undefined') return;
       try {
         await ensureLeafletLoaded();
         if (!mounted) return;
@@ -2473,23 +2393,21 @@ function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, s
           const lat = e.latlng.lat.toFixed(6);
           const lng = e.latlng.lng.toFixed(6);
           if (onChangeRef.current) {
-            onChangeRef.current('latitude', lat);
-            onChangeRef.current('longitude', lng);
+            onChangeRef.current('lat', lat);
+            onChangeRef.current('lon', lng);
           }
           if (markerRef.current) mapRef.current.removeLayer(markerRef.current);
           markerRef.current = L.marker([lat, lng]).addTo(mapRef.current);
           mapRef.current.flyTo([lat, lng], 14);
         });
 
-        // If block already has coords, show marker
-        const lat = props.latitude || props.lat || null;
-        const lng = props.longitude || props.lng || null;
+        const lat = locationProps?.latitude || locationProps?.lat || null;
+        const lng = locationProps?.longitude || locationProps?.lng || locationProps?.lon || null;
         if (lat && lng) {
           markerRef.current = window.L.marker([lat, lng]).addTo(mapRef.current);
           mapRef.current.setView([lat, lng], 14);
         }
       } catch (err) {
-        // ignore load errors
         console.warn('Leaflet load failed', err);
       }
     }
@@ -2504,24 +2422,56 @@ function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, s
         }
       } catch (e) {}
     };
-  }, [mapActive]);
+  }, [mapActive, showMapUi, locationProps?.lat, locationProps?.lon, locationProps?.latitude, locationProps?.longitude, locationProps?.lng]);
+
+  if (!block || !block.type) return (
+    <div style={{
+      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: 'var(--text3)', fontSize: 11, padding: 16, textAlign: 'center',
+    }}>
+      {ui.propsPickLine1}<br />{ui.propsPickLine2}
+    </div>
+  );
+  const def = getBlockDef(block.type, blockTypes);
+  if (!def) {
+    console.error('Unknown block type:', block.type, block);
+    return null;
+  }
+  const fields = localizedPropFields(block.type, lang, FIELDS[block.type] || []);
+  const props = block.props || {};
+  const showLocalUpload = block.type === 'photo' || block.type === 'document' || block.type === 'send_file';
+  const uploadFieldKey = block.type === 'send_file' ? 'file' : 'url';
+  const mediaStorageNote = isProjectMode
+    ? (hasActiveProSubscription ? ui.mediaProjectNote : ui.startServerNeedsPremium)
+    : ui.mediaEphemeralNote;
+
   return (
     <div style={{ overflowY: 'auto', flex: 1, padding: '10px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
         <span style={{ fontSize: 14 }}>{def?.icon}</span>
         <span style={{ fontSize: 12, fontWeight: 700, color: def?.color }}>{def?.label}</span>
       </div>
+      {showLocalUpload && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px', borderRadius: 8,
+          fontSize: 10, lineHeight: 1.45, color: 'rgba(226,232,240,0.82)',
+          background: isProjectMode ? 'rgba(62,207,142,0.08)' : 'rgba(251,191,36,0.08)',
+          border: `1px solid ${isProjectMode ? 'rgba(62,207,142,0.22)' : 'rgba(251,191,36,0.22)'}`,
+        }}>
+          {isProjectMode ? `☁ ${ui.projectFilesNote}` : mediaStorageNote}
+        </div>
+      )}
       {/* Location map picker: show when block has latitude/longitude fields */}
       {showMapUi && (
         <>
           <div style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 3, textTransform: 'uppercase' }}>Широта (Latitude)</div>
-            <input value={props.latitude || ''} readOnly />
+            <input value={props.latitude || props.lat || ''} readOnly />
           </div>
 
           <div style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 3, textTransform: 'uppercase' }}>Долгота (Longitude)</div>
-            <input value={props.longitude || ''} readOnly />
+            <input value={props.longitude || props.lng || props.lon || ''} readOnly />
           </div>
 
           <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -2533,8 +2483,8 @@ function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, s
               navigator.geolocation.getCurrentPosition((pos) => {
                 const lat = pos.coords.latitude.toFixed(6);
                 const lng = pos.coords.longitude.toFixed(6);
-                onChange('latitude', lat);
-                onChange('longitude', lng);
+                onChange('lat', lat);
+                onChange('lon', lng);
                 try {
                   if (markerRef.current) mapRef.current.removeLayer(markerRef.current);
                   markerRef.current = window.L.marker([lat, lng]).addTo(mapRef.current);
@@ -2551,7 +2501,7 @@ function PropsPanel({ block, onChange, onAttachmentChange, onAttachmentDelete, s
         </>
       )}
       {fields.map(f => {
-        if (showMapUi && (f.key === 'latitude' || f.key === 'longitude')) return null;
+        if (showMapUi && (f.key === 'lat' || f.key === 'lon' || f.key === 'latitude' || f.key === 'longitude')) return null;
         const pickerKind = getPropsFieldPickerKind(block.type, f.key);
         const pickerOptions = pickerKind ? pickerByKind[pickerKind] : [];
         const pickerListId = pickerOptions.length > 0 ? `props-picker-${block.id || block.type}-${f.key}` : undefined;

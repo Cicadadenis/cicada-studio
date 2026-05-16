@@ -144,13 +144,9 @@ class InlineKeyboardFromList:
     items_expr: Any
     text_field: str = "name"
     id_field: str = "id"
-    text_template: str = ""
-    callback_template: str = ""
     callback_prefix: str = "товар_"
     columns: int = 1
-    append_back: bool = False
-    back_text: str = ""
-    back_callback: str = ""
+    append_back: bool = True
 
 
 @dataclass
@@ -734,9 +730,9 @@ def _tokenize_expr(src: str) -> list:
         # дентификаторы  ключевые слова — одним паттерном.
         # Ключевые слова выделяются постобракой, а не отдельным альтернативным
         # паттерном, чтобы «или» в «переменная» не съедало часть идентификатора.
-        r'|[\u0430-\u044f\u0451\u0410-\u042f\u0401a-zA-Z_][\u0430-\u044f\u0451\u0410-\u042f\u0401a-zA-Z0-9_]*'  # идентификатор / ключевое слово
+        r'|[а-яёА-ЯЁa-zA-Z_][а-яёА-ЯЁa-zA-Z0-9_.]*'  # идентификатор / ключевое слово
         r'|\*\*|//|>=|<=|==|!='                        # двойные операторы
-        r'|[+\-*/%><!(),\[\]{}.:]'                     # одиночные операторы
+        r'|[+\-*/%><!(),\[\]]'                         # одиночные операторы
         r'|\s+'                                         # пробелы
     )
     return [m.group() for m in token_re.finditer(src) if m.group().strip()]
@@ -780,21 +776,9 @@ class _ExprParser:
     def parse_comparison(self):
         node = self.parse_addition()
         ops = {"==", "!=", ">", "<", ">=", "<=", "содержит", "начинается_с", "в"}
-        while True:
-            # «текст не == "да"» — отрицание сравнения (инфиксное «не»)
-            if (
-                self.peek() == "не"
-                and self.pos + 1 < len(self.tokens)
-                and self.tokens[self.pos + 1] in ops
-            ):
-                self.consume()
-                op = self.consume()
-                node = UnaryOp("не", BinaryOp(node, op, self.parse_addition()))
-            elif self.peek() in ops:
-                op = self.consume()
-                node = BinaryOp(node, op, self.parse_addition())
-            else:
-                break
+        while self.peek() in ops:
+            op = self.consume()
+            node = BinaryOp(node, op, self.parse_addition())
         return node
 
     def parse_addition(self):
@@ -847,20 +831,6 @@ class _ExprParser:
             self.consume("]")
             return self._parse_postfix(ListLiteral(items))
 
-        # объект {ключ: значение, ...}
-        if t == "{":
-            self.consume("{")
-            pairs = []
-            while self.peek() != "}":
-                if pairs:
-                    self.consume(",")
-                key = self.parse_or()
-                self.consume(":")
-                val = self.parse_or()
-                pairs.append((key, val))
-            self.consume("}")
-            return self._parse_postfix(DictLiteral(pairs))
-
         # строки
         if t.startswith('"') or t.startswith("'"):
             self.consume()
@@ -880,7 +850,7 @@ class _ExprParser:
             return Literal(int(t) if '.' not in t else float(t))
 
         # идентификатор, вызов функции или индексирование
-        if re.match(r'^[\u0430-\u044f\u0451\u0410-\u042f\u0401a-zA-Z_][\u0430-\u044f\u0451\u0410-\u042f\u0401a-zA-Z0-9_]*$', t):
+        if re.match(r'^[а-яёА-ЯЁa-zA-Z_][а-яёА-ЯЁa-zA-Z0-9_.]*$', t):
             name = self.consume()
             if self.peek() == "(":
                 self.consume("(")
@@ -896,25 +866,12 @@ class _ExprParser:
         raise SyntaxError(f"Неожиданный токен в выражении: {t!r}")
 
     def _parse_postfix(self, node):
-        """Обрабатывает постфиксные операторы: obj[key] и obj.field."""
-        while True:
-            if self.peek() == "[":
-                self.consume("[")
-                key = self.parse_or()
-                self.consume("]")
-                node = Index(node, key)
-                continue
-            if self.peek() == ".":
-                self.consume(".")
-                prop = self.consume()
-                if not prop or not re.match(
-                    r'^[\u0430-\u044f\u0451\u0410-\u042f\u0401a-zA-Z_][\u0430-\u044f\u0451\u0410-\u042f\u0401a-zA-Z0-9_]*$',
-                    prop,
-                ):
-                    raise SyntaxError(f"Ожидалось имя поля после '.', получено {prop!r}")
-                node = Attr(node, prop)
-                continue
-            break
+        """Обрабатывает постфиксные операторы: obj[key]."""
+        while self.peek() == "[":
+            self.consume("[")
+            key = self.parse_or()
+            self.consume("]")
+            node = Index(node, key)
         return node
 
 
@@ -924,33 +881,7 @@ def tokenise(text: str):
     """Split source into logical lines, stripping comments."""
     lines = []
     for raw in text.splitlines():
-        # Remove comments but ignore '#' inside quoted strings.
-        out_chars = []
-        in_quote = None
-        escaped = False
-        for ch in raw:
-            if escaped:
-                out_chars.append(ch)
-                escaped = False
-                continue
-            if ch == "\\":
-                out_chars.append(ch)
-                escaped = True
-                continue
-            if in_quote:
-                out_chars.append(ch)
-                if ch == in_quote:
-                    in_quote = None
-                continue
-            if ch in ('"', "'"):
-                in_quote = ch
-                out_chars.append(ch)
-                continue
-            if ch == '#':
-                break
-            out_chars.append(ch)
-
-        line = ''.join(out_chars).rstrip()
+        line = raw.split("#")[0].rstrip()
         if line.strip():
             lines.append(line)
     return lines
@@ -986,9 +917,6 @@ def parse_string_expr(raw: str) -> list:
                 parts.append(stripped_quote[last_end:match.start()])
             # внутри {} может быть любое выражение
             inner = match.group(1).strip()
-            if not inner:
-                parts.append("")
-                continue
             try:
                 parts.append(parse_expr(inner))
             except SyntaxError:
@@ -1085,23 +1013,10 @@ def parse_simple_condition(raw: str) -> "BinaryOp | UnaryOp | Variable | Literal
         if raw.startswith("не "):
             negate = True
             raw = raw[3:].strip()
-        m = re.match(
-            r'^(.+?)\s+не\s+(==|!=|>=|<=|>|<|содержит|начинается_с)\s+(.+)$',
-            raw,
-        )
-        if m:
-            left, op, right = m.group(1), m.group(2), m.group(3)
-            return Condition(VarRef(left.strip()), op, VarRef(right.strip()), negate=True)
-        m = re.match(r'^(.+?)\s+(содержит|начинается_с)\s+(.+)$', raw)
-        if m:
-            left, op, right = m.group(1), m.group(2), m.group(3)
-            return Condition(VarRef(left.strip()), op, VarRef(right.strip()), negate)
-        for op in ("==", "!=", ">=", "<=", ">", "<"):
-            idx = raw.find(op)
-            if idx > 0:
-                left, right = raw[:idx], raw[idx + len(op):]
-                if left.strip():
-                    return Condition(VarRef(left.strip()), op, VarRef(right.strip()), negate)
+        for op in ("==", "!=", ">=", "<=", ">", "<", "содержит"):
+            if op in raw:
+                left, right = raw.split(op, 1)
+                return Condition(VarRef(left.strip()), op, VarRef(right.strip()), negate)
         return Condition(VarRef(raw), "!=", "", negate)
 
 
@@ -1163,15 +1078,11 @@ class Parser:
                 prog.config["commands"] = commands
                 continue
 
-            # ── глобально переменная = значение (в т.ч. многострочный объект) ──
-            m = re.match(r'^глобально\s+(\w+)\s*=\s*(.*)$', line)
+            # ── глобально переменная = значение ──
+            m = re.match(r'^глобально\s+(\w+)\s*=\s*(.+)$', line)
             if m:
                 self.consume()
-                name, rest = m.group(1), m.group(2).strip()
-                if rest.startswith("{"):
-                    prog.globals[name] = parse_value(self._collect_braced_value(rest))
-                else:
-                    prog.globals[name] = parse_value(rest)
+                prog.globals[m.group(1)] = parse_value(m.group(2))
                 continue
 
             # ── бот "TOKEN" / "TOKEN" ──
@@ -1293,28 +1204,6 @@ class Parser:
                 prog.handlers.append(Handler("text", None, body))
                 continue
 
-            # ── при callback начинается_с "prefix": ──
-            m = re.match(r'^при callback начинается_с\s+"([^"]+)"\s*:', line)
-            if m:
-                self.consume()
-                body = self._parse_block()
-                prog.handlers.append(Handler("callback_prefix", m.group(1), body))
-                continue
-
-            # ── при callback "exact": ──
-            m = re.match(r'^при callback\s+"([^"]+)"\s*:', line)
-            if m:
-                self.consume()
-                body = self._parse_block()
-                prog.handlers.append(Handler("callback", m.group(1), body))
-                continue
-
-            if line.startswith("при callback:") or line == "при callback":
-                self.consume()
-                body = self._parse_block()
-                prog.handlers.append(Handler("callback", None, body))
-                continue
-
             # ── при нажатии "callback": или при нажатии: ──
             m = re.match(r'^при нажатии\s+"([^"]+)"\s*:', line)
             if m:
@@ -1421,83 +1310,6 @@ class Parser:
 
         return prog
 
-    def _collect_braced_value(self, initial: str) -> str:
-        """Собирает многострочный литерал {...} до закрывающей скобки."""
-        parts = [initial]
-        depth = initial.count("{") - initial.count("}")
-        while depth > 0 and self.pos < len(self.lines):
-            parts.append(self.lines[self.pos])
-            self.consume()
-            depth += parts[-1].count("{") - parts[-1].count("}")
-        return "\n".join(parts)
-
-    def _parse_inline_array_options(self, stmt_indent: int) -> dict:
-        """Опции под inline из массива (вложенные строки)."""
-        opts = {
-            "text_field": "name",
-            "id_field": "id",
-            "text_template": "",
-            "callback_template": "",
-            "callback_prefix": "",
-            "columns": 1,
-            "append_back": False,
-            "back_text": "",
-            "back_callback": "",
-        }
-        while self.pos < len(self.lines):
-            line = self.peek()
-            if indent_of(line) <= stmt_indent:
-                break
-            self.consume()
-            opt = line.strip()
-            m = re.match(r'^текст\s+"([^"]*)"$', opt)
-            if m:
-                opts["text_template"] = m.group(1)
-                continue
-            m = re.match(r'^callback\s+"([^"]*)"$', opt)
-            if m:
-                opts["callback_template"] = m.group(1)
-                continue
-            m = re.match(r'^назад\s+"([^"]+)"\s*(?:→|->)\s*"([^"]+)"', opt)
-            if m:
-                opts["back_text"] = m.group(1)
-                opts["back_callback"] = m.group(2)
-                continue
-            m = re.match(r'^колонки\s+(\d+)$', opt)
-            if m:
-                opts["columns"] = int(m.group(1))
-                continue
-        return opts
-
-    @staticmethod
-    def _parse_inline_array_options_inline(rest: str) -> dict:
-        """Опции inline из массива в одной строке."""
-        opts = {
-            "text_field": "name",
-            "id_field": "id",
-            "text_template": "",
-            "callback_template": "",
-            "callback_prefix": "",
-            "columns": 1,
-            "append_back": False,
-            "back_text": "",
-            "back_callback": "",
-        }
-        m = re.search(r'\bтекст\s+"([^"]*)"', rest)
-        if m:
-            opts["text_template"] = m.group(1)
-        m = re.search(r'\bcallback\s+"([^"]*)"', rest)
-        if m:
-            opts["callback_template"] = m.group(1)
-        m = re.search(r'\bназад\s+"([^"]+)"\s*(?:→|->)\s*"([^"]+)"', rest)
-        if m:
-            opts["back_text"] = m.group(1)
-            opts["back_callback"] = m.group(2)
-        m = re.search(r'\bколонки\s+(\d+)', rest)
-        if m:
-            opts["columns"] = int(m.group(1))
-        return opts
-
     def _parse_block(self) -> list:
         """Читает с отступом блок инструкций."""
         stmts = []
@@ -1537,28 +1349,14 @@ class Parser:
                 stmts.append(Step(step_name, step_body))
                 continue
 
-            # для каждого VAR в COLLECTION:  /  для VAR в COLLECTION:
-            m = re.match(r'^для(?:\s+каждого)?\s+(\w+)\s+в\s+(.+):\s*$', stripped)
+            # для каждого VAR в COLLECTION:
+            m = re.match(r'^для каждого\s+(\w+)\s+в\s+(.+):\s*$', stripped)
             if m:
                 self.consume()
                 var_name = m.group(1)
                 collection = parse_value(m.group(2).strip())
                 body = self._parse_block()
                 stmts.append(ForEach(variable=var_name, collection=collection, body=body))
-                continue
-
-            # inline из массива (блочный формат опций)
-            m = re.match(r'^inline\s+из\s+массива\s+(.+)$', stripped)
-            if m:
-                self.consume()
-                stmt_line_ind = ind
-                rest = m.group(1).strip()
-                parts = re.split(r'\s+(?=текст\s+"|callback\s+"|назад\s+"|колонки\s+)', rest)
-                items_expr = parse_expr(parts[0].strip())
-                opts = Parser._parse_inline_array_options_inline(rest)
-                if self.pos < len(self.lines) and indent_of(self.peek()) > stmt_line_ind:
-                    opts = {**opts, **self._parse_inline_array_options(stmt_line_ind)}
-                stmts.append(InlineKeyboardFromList(items_expr=items_expr, **opts))
                 continue
 
             # пока условие: (цикл while — настоящий)
@@ -1732,11 +1530,6 @@ class Parser:
         if m:
             return Remember(m.group(1), parse_value(m.group(2)))
 
-        # переменная = значение
-        m = re.match(r'^(\w+)\s*=\s*(.+)$', line)
-        if m:
-            return Remember(m.group(1), parse_value(m.group(2)))
-
         # пусть переменная = значение (типизированное объявление)
         m = re.match(r'^пусть\s+(\w+)\s*=\s*(.+)$', line)
         if m:
@@ -1771,15 +1564,6 @@ class Parser:
         m = re.match(r'^кнопка\s+"([^"]+)"\s*->\s*url\s+"([^"]+)"$', line)
         if m:
             return InlineButton(text=m.group(1), url=m.group(2))
-
-        # inline из массива список [текст "..."] [callback "cat:{item}"] [назад "⬅️" → "home"] [колонки 2]
-        m = re.match(r'^inline\s+из\s+массива\s+(.+)$', line)
-        if m:
-            rest = m.group(1).strip()
-            parts = re.split(r'\s+(?=текст\s+"|callback\s+"|назад\s+"|колонки\s+)', rest)
-            items_raw = parts[0].strip()
-            opts = Parser._parse_inline_array_options_inline(rest)
-            return InlineKeyboardFromList(items_expr=parse_expr(items_raw), **opts)
 
         # inline из бд "ключ" [текст "name"] [id "id"] [callback "prefix"] [columns=2] [назад "Назад" → "cb"]
         m = re.match(r'^(?:inline|inline-кнопки)\s+из\s+бд\s+(.+)$', line)

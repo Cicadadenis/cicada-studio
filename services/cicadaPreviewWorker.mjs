@@ -1,5 +1,5 @@
+import os from 'os';
 import { spawn } from 'child_process';
-import { CICADA_TG_ROOT } from '../config.js';
 
 let child = null;
 let readyQueue = [];
@@ -11,28 +11,20 @@ function pythonCmd() {
   return 'python3';
 }
 
-function cicadaPkgRoot() {
-  return String(CICADA_TG_ROOT || '').trim();
-}
-
-function spawnWorker(pkgRoot) {
+function spawnWorker() {
   if (child && !child.killed) return child;
 
   const py = pythonCmd();
-  const sep = process.platform === 'win32' ? ';' : ':';
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
     PYTHONUNBUFFERED: '1',
-    ...(pkgRoot
-      ? { PYTHONPATH: pkgRoot + (process.env.PYTHONPATH ? `${sep}${process.env.PYTHONPATH}` : '') }
-      : {}),
   };
 
   const proc = spawn(py, ['-u', '-m', 'cicada.preview_worker'], {
-    cwd: pkgRoot || process.cwd(),
+    cwd: os.tmpdir(),
     env,
     shell: false,
     windowsHide: true,
@@ -94,8 +86,7 @@ function spawnWorker(pkgRoot) {
  * @returns {Promise<object>}
  */
 export function sendPreviewRequest(body) {
-  const pkgRoot = cicadaPkgRoot();
-  spawnWorker(pkgRoot);
+  spawnWorker();
 
   if (!child?.stdin) {
     return Promise.resolve({ ok: false, error: 'Не удалось запустить процесс превью' });
@@ -129,6 +120,6 @@ export function sendPreviewRequest(body) {
 export function previewWorkerStatus() {
   return {
     running: Boolean(child && !child.killed),
-    cicadaRoot: cicadaPkgRoot() || 'installed-package',
+    cicadaRoot: 'installed-package',
   };
 }

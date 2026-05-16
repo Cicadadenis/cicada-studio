@@ -858,27 +858,6 @@ class Executor:
             err.step_name = getattr(ctx, "current_step_name", None)
         return err
 
-    def _resolve_chat_id(self, ctx):
-        """Resolve chat_id from context or DEFAULT_CHAT_ID env var.
-
-        Returns int chat_id or raises CicadaRuntimeError if not available.
-        Adds a debug log indicating the source.
-        """
-        import os
-        cid = getattr(ctx, "chat_id", None)
-        source = "ctx" if cid else None
-        if not cid:
-            cid = os.environ.get("DEFAULT_CHAT_ID")
-            source = "env:DEFAULT_CHAT_ID" if cid else None
-        if not cid:
-            raise CicadaRuntimeError("chat_id is not set and DEFAULT_CHAT_ID is not configured")
-        try:
-            cid_int = int(cid)
-        except Exception:
-            raise CicadaRuntimeError(f"Invalid chat_id value: {cid}")
-        self._log("DEBUG", f"Resolved chat_id from {source}: {cid_int}", ctx)
-        return cid_int
-
     def _eval(self, node, ctx):
         strict = not self.debug
         try:
@@ -1416,11 +1395,9 @@ class Executor:
         if buttons:
             if not text.strip():
                 text = "\u200b"
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_buttons_matrix(chat_id, buttons, text=text)
+            self._send_buttons_matrix(ctx.chat_id, buttons, text=text)
         elif text.strip():
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_message(chat_id, text)
+            self._send_message(ctx.chat_id, text)
 
         ctx._pending_message = None
 
@@ -1481,11 +1458,9 @@ class Executor:
         if photo is not None and photo != "":
             if not isinstance(photo, _BytesIO):
                 photo = str(photo)
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_media(chat_id, "photo", photo)
+            self._send_media(ctx.chat_id, "photo", photo)
         else:
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_message(chat_id, "⚠️ Фото не задано")
+            self._send_message(ctx.chat_id, "⚠️ Фото не задано")
 
     # ── Циклы ─────────────────────────────────────────────────────────
 
@@ -1685,26 +1660,21 @@ class Executor:
             # Потребляем накопленный текст, чтобы финальный _flush не дублировал его
             ctx._pending_message = None
 
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_inline_keyboard(chat_id, keyboard, text=pending_text or "\u200b")
+        self._send_inline_keyboard(ctx.chat_id, keyboard, text=pending_text or "\u200b")
 
     def _exec_photo(self, stmt: Photo, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "photo", stmt.url)
+        self._send_media(ctx.chat_id, "photo", stmt.url)
 
     def _exec_sticker(self, stmt: Sticker, ctx):
         file_id = eval_expr(stmt.file_id, ctx) if not isinstance(stmt.file_id, str) else stmt.file_id
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "sticker", str(file_id))
+        self._send_media(ctx.chat_id, "sticker", str(file_id))
 
     def _exec_forward_photo(self, stmt: ForwardPhoto, ctx):
         file_id = ctx.get("файл_id", "")
         if file_id:
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_media(chat_id, "photo", file_id, caption=stmt.caption)
+            self._send_media(ctx.chat_id, "photo", file_id, caption=stmt.caption)
         else:
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_message(chat_id, "⚠️ Нет фото для пересылки")
+            self._send_message(ctx.chat_id, "⚠️ Нет фото для пересылки")
 
     def _exec_save_file(self, stmt: SaveFile, ctx):
         ctx.set(stmt.variable, ctx.get("файл_id", ""))
@@ -1723,66 +1693,56 @@ class Executor:
 
     def _send_formatted_text(self, ctx, parts: list, kind: str, method_name: str):
         text = self._render_parts(parts, ctx)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform(kind, chat_id, text=text)
-        getattr(self.tg, method_name)(chat_id, text)
+        self._send_platform(kind, ctx.chat_id, text=text)
+        getattr(self.tg, method_name)(ctx.chat_id, text)
 
     def _exec_send_document(self, stmt: SendDocument, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "document", file, stmt.caption)
+        self._send_media(ctx.chat_id, "document", file, stmt.caption)
 
     def _exec_send_audio(self, stmt: SendAudio, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "audio", file, stmt.caption)
+        self._send_media(ctx.chat_id, "audio", file, stmt.caption)
 
     def _exec_send_video(self, stmt: SendVideo, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "video", file, stmt.caption)
+        self._send_media(ctx.chat_id, "video", file, stmt.caption)
 
     def _exec_send_voice(self, stmt: SendVoice, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "voice", file, stmt.caption)
+        self._send_media(ctx.chat_id, "voice", file, stmt.caption)
 
     def _exec_send_location(self, stmt: SendLocation, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("location", chat_id, latitude=stmt.latitude, longitude=stmt.longitude)
-        self.tg.send_location(chat_id, stmt.latitude, stmt.longitude)
+        self._send_platform("location", ctx.chat_id, latitude=stmt.latitude, longitude=stmt.longitude)
+        self.tg.send_location(ctx.chat_id, stmt.latitude, stmt.longitude)
 
     def _exec_send_contact(self, stmt: SendContact, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("contact", chat_id, phone=stmt.phone, name=stmt.name)
-        self.tg.send_contact(chat_id, stmt.phone, stmt.name)
+        self._send_platform("contact", ctx.chat_id, phone=stmt.phone, name=stmt.name)
+        self.tg.send_contact(ctx.chat_id, stmt.phone, stmt.name)
 
     def _exec_send_poll(self, stmt: SendPoll, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("poll", chat_id, question=stmt.question, options=stmt.options)
-        self.tg.send_poll(chat_id, stmt.question, stmt.options)
+        self._send_platform("poll", ctx.chat_id, question=stmt.question, options=stmt.options)
+        self.tg.send_poll(ctx.chat_id, stmt.question, stmt.options)
 
     def _exec_send_invoice(self, stmt: SendInvoice, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("invoice", chat_id, title=stmt.title, description=stmt.description, amount=stmt.amount)
-        self.tg.send_invoice(chat_id, stmt.title, stmt.description, stmt.amount)
+        self._send_platform("invoice", ctx.chat_id, title=stmt.title, description=stmt.description, amount=stmt.amount)
+        self.tg.send_invoice(ctx.chat_id, stmt.title, stmt.description, stmt.amount)
 
     def _exec_send_game(self, stmt: SendGame, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("game", chat_id, short_name=stmt.short_name)
-        self.tg.send_game(chat_id, stmt.short_name)
+        self._send_platform("game", ctx.chat_id, short_name=stmt.short_name)
+        self.tg.send_game(ctx.chat_id, stmt.short_name)
 
     def _exec_download_file(self, stmt: DownloadFile, ctx):
         file_id = ctx.get("файл_id", "")

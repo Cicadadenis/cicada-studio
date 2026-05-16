@@ -173,7 +173,8 @@ export const LIBRARY_MODULE_LABELS = {
     "tg_contact_location": { name: "Contact & geolocation", desc: "Handle incoming contacts and map points" },
     "tg_voice_sticker": { name: "Voice & sticker", desc: "Receive voice messages and stickers, save file_id" },
     "tg_inline_router": { name: "Inline menu router", desc: "Route callback_data by prefix in one handler" },
-    "db_inline_buttons": { name: "Inline buttons from DB", desc: "Build inline keyboard from a DB list" },
+    "db_inline_buttons": { name: "Catalog from DB (setup then show)", desc: "Create categories and products in DB, then 📦 Catalog shows inline buttons from DB" },
+    "if_not_text": { name: "If not (answer is not «yes»)", desc: "«If not» block: DSL «если text не == \"да\"»" },
   },
   uk: {
     "admin_by_id": { name: "Перевірка адміна за ID", desc: "Дозволяє команду лише для заданого Telegram ID" },
@@ -295,6 +296,7 @@ export const LIBRARY_MODULE_LABELS = {
     "tg_contact_location": { name: "Контакт і геолокація", desc: "Обробка контактів та точок на карті" },
     "tg_voice_sticker": { name: "Голосові та стікери", desc: "Прийом голосових та стікерів" },
     "tg_inline_router": { name: "Inline-роутер", desc: "Один обробник для callback за префіксом" },
-    "db_inline_buttons": { name: "Inline-кнопки з БД", desc: "Клавіатура зі списку в БД" },
+    "db_inline_buttons": { name: "Каталог з БД (спочатку наповнити)", desc: "Категорії та товари в БД, потім 📦 Каталог — inline з БД" },
+    "if_not_text": { name: "Якщо не (відповідь не «так»)", desc: "Блок «Якщо не»: у коді «если текст не == \"да\"»" },
   },
 };

@@ -262,7 +262,16 @@ def eval_expr(node, ctx, strict: bool = True):
         return [eval_expr(item, ctx, strict) for item in node.items]
 
     if isinstance(node, DictLiteral):
-        return {k: eval_expr(v, ctx, strict) for k, v in node.pairs}
+        out = {}
+        for k, v in node.pairs:
+            if isinstance(k, Variable):
+                key = k.name
+            elif isinstance(k, Literal):
+                key = str(k.value)
+            else:
+                key = str(eval_expr(k, ctx, strict))
+            out[key] = eval_expr(v, ctx, strict)
+        return out
 
     if isinstance(node, Index):
         target = eval_expr(node.target, ctx, strict)
@@ -340,6 +349,39 @@ def _eval_index(target, key):
     raise CicadaTypeError(
         f"Индексирование недоступно для типа '{_cicada_type(target)}'."
     )
+
+
+def _format_template_scalar(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "истина" if val else "ложь"
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val)
+
+
+def render_item_template(template: str, item) -> str:
+    """Подстановка {item} и {item.field} в шаблоны inline-кнопок."""
+    if not template or "{" not in template:
+        return template
+
+    def repl(m: re.Match) -> str:
+        path = m.group(1).strip()
+        if path == "item":
+            return _format_template_scalar(item)
+        if path.startswith("item."):
+            cur = item
+            for part in path.split(".")[1:]:
+                if isinstance(cur, dict):
+                    cur = cur.get(part)
+                else:
+                    cur = None
+                    break
+            return _format_template_scalar(cur)
+        return m.group(0)
+
+    return re.sub(r"\{([^}]+)\}", repl, template)
 
 
 def _eval_attr(target, name: str):
@@ -578,6 +620,8 @@ def _call_builtin(name: str, args: list):
         return _cicada_type(args[0]) if args else "пусто"
 
     # п. 3: явные функции преобразования
+    if name == "число":
+        name = "в_число"
     if name == "в_число":
         if not args:
             raise CicadaTypeError("в_число(): нужен хотя бы один аргумент.")
@@ -1035,6 +1079,7 @@ class Executor:
         ctx.set("сообщение_id", msg.get("message_id", 0))
         data = callback_query.get("data", "")
         ctx.set("кнопка", data)
+        ctx.set("callback", data)
         ctx.set("текст", data)
 
         try:
@@ -1061,14 +1106,18 @@ class Executor:
             return
 
         matched = False
-        # Точные callback-обработчики важнее общего `при нажатии:`.
-        # Иначе роутер без trigger перехватывает кнопку вроде "назад" раньше
-        # специализированного `при нажатии "назад":`.
+        # Точные callback-обработчики важнее префиксных и общего `при нажатии:`.
         for h in self.program.handlers:
             if h.kind == "callback" and h.trigger == data:
                 self._exec_body(h.body, ctx)
                 matched = True
                 break
+        if not matched:
+            for h in self.program.handlers:
+                if h.kind == "callback_prefix" and h.trigger and data.startswith(h.trigger):
+                    self._exec_body(h.body, ctx)
+                    matched = True
+                    break
         if not matched:
             for h in self.program.handlers:
                 if h.kind == "callback" and h.trigger is None:
@@ -1355,7 +1404,7 @@ class Executor:
 
     def _resolve_chat_id(self, chat_id: int | None) -> int:
         """Resolve chat_id or fallback to DEFAULT_CHAT_ID env var. Raises CicadaRuntimeError if missing/invalid."""
-        resolved = chat_id or _os.environ.get("DEFAULT_CHAT_ID")
+        resolved = _os.environ.get("DEFAULT_CHAT_ID") if chat_id in (None, "") else chat_id
         if resolved in (None, ""):
             raise CicadaRuntimeError("chat_id не задан для отправки сообщения")
         try:
@@ -1384,15 +1433,7 @@ class Executor:
         Если chat_id не передан — пытаемся взять из окружения `DEFAULT_CHAT_ID`.
         Если chat_id всё ещё не задан — выдаём подробную ошибку.
         """
-        # Разрешаем fallback на DEFAULT_CHAT_ID из окружения
-        resolved_chat = chat_id or _os.environ.get("DEFAULT_CHAT_ID")
-        if resolved_chat in (None, ""):
-            raise CicadaRuntimeError("chat_id не задан для отправки медиа")
-        try:
-            resolved_chat = int(resolved_chat)
-        except Exception:
-            raise CicadaRuntimeError(f"chat_id не является числом: {resolved_chat!r}")
-
+        resolved_chat = self._resolve_chat_id(chat_id)
         self._emit_effect(MediaEffect(resolved_chat, media_type, file, caption))
         method = getattr(self.tg, f"send_{media_type}")
         if media_type == "sticker":
@@ -1576,21 +1617,19 @@ class Executor:
         if not isinstance(items, list):
             raise CicadaTypeError("inline-кнопки из списка: ожидается список items.")
 
-        cols = max(1, int(stmt.columns or 1))
-        flat_buttons = []
-        for item in items:
-            if isinstance(item, dict):
-                text = str(item.get(stmt.text_field, ""))
-                item_id = item.get(stmt.id_field, "")
+        back_text = stmt.back_text or ("🔙 Назад" if stmt.append_back else "")
+        back_callback = stmt.back_callback or ("back" if stmt.append_back else "")
         self._send_inline_items(
             items,
             ctx,
             text_field=stmt.text_field,
             id_field=stmt.id_field,
+            text_template=stmt.text_template,
+            callback_template=stmt.callback_template,
             callback_prefix=stmt.callback_prefix,
             columns=stmt.columns,
-            back_text="🔙 Назад" if stmt.append_back else "",
-            back_callback="back" if stmt.append_back else "",
+            back_text=back_text,
+            back_callback=back_callback,
         )
 
     def _exec_inline_keyboard_from_db(self, stmt: InlineKeyboardFromDB, ctx):
@@ -1623,6 +1662,8 @@ class Executor:
         *,
         text_field: str,
         id_field: str,
+        text_template: str = "",
+        callback_template: str = "",
         callback_prefix: str,
         columns: int,
         back_text: str = "",
@@ -1630,20 +1671,22 @@ class Executor:
     ):
         flat_buttons = []
         for item in items:
-            if isinstance(item, dict):
+            if text_template:
+                text = render_item_template(text_template, item)
+            elif isinstance(item, dict):
                 text = str(item.get(text_field, ""))
-                item_id = item.get(id_field, text)
             else:
                 text = str(item)
-                item_id = item
+            if callback_template:
+                callback = render_item_template(callback_template, item)
+            elif isinstance(item, dict):
+                item_id = item.get(id_field, text)
+                callback = f"{callback_prefix}{item_id}"
+            else:
+                callback = f"{callback_prefix}{item}"
             if not text:
                 continue
-            flat_buttons.append(InlineButton(text=text, callback=f"{stmt.callback_prefix}{item_id}"))
-
-        if stmt.append_back:
-            flat_buttons.append(InlineButton(text="🔙 Назад", callback="back"))
-
-            flat_buttons.append(InlineButton(text=text, callback=f"{callback_prefix}{item_id}"))
+            flat_buttons.append(InlineButton(text=text, callback=callback))
 
         if back_text and back_callback:
             flat_buttons.append(InlineButton(text=back_text, callback=back_callback))

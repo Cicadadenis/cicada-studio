@@ -94,10 +94,13 @@ class UserContext:
     @classmethod
     def from_dict(cls, data: dict, globals_dict: dict = None) -> "UserContext":
         """Восстанавливает UserContext из to_dict()."""
+        user_id = data.get("user_id")
+        if user_id is not None:
+            user_id = int(user_id)
         ctx = cls(
             int(data.get("chat_id", 0)),
             globals_dict=globals_dict,
-            user_id=data.get("user_id"),
+            user_id=user_id,
         )
         ctx.vars.update(data.get("vars") or {})
         ctx.user_obj.update(data.get("user_obj") or {})

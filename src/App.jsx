@@ -45,6 +45,7 @@ import {
 } from './builder/BuilderComponents.jsx';
 import DSLPane, { fixDslSchema } from './builder/DSLPane.jsx';
 import { lintDSLSchema } from '../core/validator/schema.js';
+import { isConditionLikeType, parseIfConditionFromDsl } from '../core/dslCondition.js';
 import { canRenderUi, stackToDSL } from '../core/stacksToDsl.js';
 import { getCsrfTokenForRequest } from './csrf.js';
 import {
@@ -738,10 +739,14 @@ export default function App() {
   const [oauth2faPending, setOauth2faPending] = useState(false);
   const [userProjects, setUserProjects] = useState([]);
   const [projectName, setProjectName] = useState('');
+  const [activeProjectId, setActiveProjectId] = useState(null);
+  const [botRunMode, setBotRunMode] = useState(null);
   const [showExamples, setShowExamples] = useState(false);
   /** Якорь кнопки «Примеры» — меню рендерим в portal, иначе перекрывается холстом / stacking context шапки */
   const examplesToggleRef = useRef(null);
   const [examplesMenuRect, setExamplesMenuRect] = useState(null);
+  const filesMenuToggleRef = useRef(null);
+  const [filesMenuRect, setFilesMenuRect] = useState(null);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAIModal, setShowAIModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -775,6 +780,7 @@ export default function App() {
       currentUser.subscriptionExp != null &&
       Number(currentUser.subscriptionExp) > Date.now(),
   );
+  const isProjectMode = Boolean(activeProjectId);
   const canSeeCode = isAdmin || hasActiveProSubscription;
   const canUseAiGenerator = hasActiveProSubscription;
   const aiPromptText = aiPrompt.trim();
@@ -860,6 +866,21 @@ export default function App() {
       minWidth: Math.max(isMobileView ? 200 : 190, r.width),
     });
   }, [showExamples, isMobileView]);
+
+  useLayoutEffect(() => {
+    if (!showFilesMenu) {
+      setFilesMenuRect(null);
+      return;
+    }
+    const el = filesMenuToggleRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setFilesMenuRect({
+      top: r.bottom + 6,
+      left: Math.max(8, r.left),
+      minWidth: Math.max(186, r.width),
+    });
+  }, [showFilesMenu]);
 
   const onboardingKey = currentUser
     ? `cicada_onboarding_v2_${currentUser.id}_${isMobileView ? 'mobile' : 'desktop'}`
@@ -1537,6 +1558,7 @@ export default function App() {
     setStacks([]);
     setSelectedBlockId(null);
     setSelectedStackId(null);
+    setActiveProjectId(null);
   }, []);
 
   // ── Info panel helpers ────────────────────────────────────────────────────────
@@ -1767,9 +1789,46 @@ export default function App() {
 
   // Parse DSL code to stacks
   const parseDSL = useCallback((code) => {
-    const lines = code.split('\n');
-    const stacks = [];
-    let x = 40, y = 20;
+    try {
+      // Предварительная обработка: объединяем многострочные строки
+      // Когда текст спаннит несколько строк внутри кавычек, объединяем его в одну логическую строку
+      const lines = [];
+      let current = '';
+      let inQuote = false;
+      const rawLines = code.split('\n');
+      
+      for (let i = 0; i < rawLines.length; i++) {
+        const line = rawLines[i];
+        let charIndex = 0;
+        
+        while (charIndex < line.length) {
+          const char = line[charIndex];
+          current += char;
+          
+          if (char === '"' && (charIndex === 0 || line[charIndex - 1] !== '\\')) {
+            inQuote = !inQuote;
+          }
+          charIndex++;
+        }
+        
+        // Если мы не внутри кавычек, это конец логической строки
+        if (!inQuote) {
+          if (current.trim()) {
+            lines.push(current);
+          }
+          current = '';
+        } else {
+          // Если внутри кавычек, добавляем реальный перевод строки внутри текущей логической строки
+          current += '\n';
+        }
+      }
+      
+      if (current.trim()) {
+        lines.push(current);
+      }
+      
+      const stacks = [];
+      let x = 40, y = 20;
 
     // Вспомогательные функции
     const getIndent = (raw) => {
@@ -1777,7 +1836,7 @@ export default function App() {
       return ((m?.[0] || '').replace(/\t/g, '    ')).length;
     };
     const extractString = (line) => {
-      const m = line.match(/"([^"]*)"/); return m ? m[1] : '';
+      const m = line.match(/"([^"]*)"/s); return m ? m[1] : '';
     };
     const extractAllStrings = (line) => {
       const m = line.match(/"([^"]*)"/g);
@@ -1827,7 +1886,10 @@ export default function App() {
       if (t === 'иначе:' || t === 'иначе') return { type: 'else', props: {} };
 
       // Дочерние блоки
-      if (t.startsWith('если ') || t.startsWith('если(')) { const cond = t.replace(/^если\s*/, '').replace(/:$/, ''); return { type: 'condition', props: { cond } }; }
+      if (t.startsWith('если ') || t.startsWith('если(')) {
+        const inner = t.replace(/^если\s*\(?/, '').replace(/\)?:?\s*$/, '');
+        return parseIfConditionFromDsl(inner);
+      }
       if (t === 'иначе:' || t === 'иначе') return { type: 'else', props: {} };
       if (t.startsWith('шаг '))         return { type: 'step',    props: { name: t.replace(/^шаг\s+/, '').replace(/:$/, '').trim() } };
       if (t.startsWith('ответ_markdown_v2 ')) return { type: 'message', props: { text: extractString(t), markup: 'markdown_v2' } };
@@ -2058,14 +2120,14 @@ export default function App() {
           if (
             currentStack._lastScopeType &&
             indent <= currentStack._lastScopeIndent &&
-            parsed.type !== 'condition' && parsed.type !== 'else' && parsed.type !== 'step'
+            !isConditionLikeType(parsed.type) && parsed.type !== 'else' && parsed.type !== 'step'
           ) {
             props._afterScope = true;
             currentStack._lastScopeType = null;
             currentStack._lastScopeIndent = -1;
           }
           // Запоминаем когда открывается scope
-          if (parsed.type === 'condition' || parsed.type === 'else' || parsed.type === 'step' || parsed.type === 'loop') {
+          if (isConditionLikeType(parsed.type) || parsed.type === 'else' || parsed.type === 'step' || parsed.type === 'loop') {
             currentStack._lastScopeType = parsed.type;
             currentStack._lastScopeIndent = indent;
             if (parsed.type === 'step' && isScenarioStack) {
@@ -2094,6 +2156,10 @@ export default function App() {
     }
 
     return stacks.length > 0 ? stacks : null;
+    } catch (error) {
+      console.error('DSL Parser Error:', error);
+      return null;
+    }
   }, []);
 
   const mergeLibraryStacks = useCallback((prevStacks, incomingStacks) => {
@@ -2112,6 +2178,7 @@ export default function App() {
     };
     const blockKey = (b) => `${b?.type || ''}:${JSON.stringify(b?.props || {})}`;
 
+    const REPLACE_MERGE_ROOTS = new Set(['bot', 'start', 'commands', 'version']);
     const rootIndex = new Map(result.map((s, i) => [rootKey(s), i]));
     for (const stack of incomingStacks) {
       const k = rootKey(stack);
@@ -2122,6 +2189,26 @@ export default function App() {
         continue;
       }
       const target = result[i];
+      const incomingRoot = stack.blocks?.[0];
+      const targetRoot = target.blocks?.[0];
+      const sameRootType = incomingRoot?.type === targetRoot?.type;
+      const shouldReplaceStack =
+        sameRootType && (
+          REPLACE_MERGE_ROOTS.has(incomingRoot?.type)
+          || (incomingRoot?.type === 'callback'
+            && (incomingRoot.props?.label || '') === (targetRoot?.props?.label || ''))
+          || (incomingRoot?.type === 'global'
+            && (incomingRoot.props?.varname || '') === (targetRoot?.props?.varname || ''))
+        );
+      if (shouldReplaceStack) {
+        result[i] = {
+          ...stack,
+          id: target.id || stack.id,
+          x: target.x ?? stack.x,
+          y: target.y ?? stack.y,
+        };
+        continue;
+      }
       const seen = new Set((target.blocks || []).map(blockKey));
       for (const b of (stack.blocks || [])) {
         const bk = blockKey(b);
@@ -2263,7 +2350,7 @@ export default function App() {
   const EXAMPLE_WEATHER = `бот "YOUR_BOT_TOKEN"
 
 при старте:
-    ответ "☀️ Привет! Я покажу погоду в твоём городе.\\nВыбери город:"
+    ответ "☀️ Привет! Я покажу погоду в твоём городе.\nВыбери город:"
     кнопки:
         ["Запорожье", "Киев"]
         ["Львов", "Информация о боте"]
@@ -2271,24 +2358,24 @@ export default function App() {
 
 при нажатии "Запорожье":
     fetch "https://wttr.in/Zaporizhzhia?format=3&lang=ru" → raw
-    ответ "🌍 Запорожье, Украина\\n🌡 {raw}"
+    ответ "🌍 Запорожье, Украина\n🌡 {raw}"
     кнопки "🔄 Обновить" "🏠 Главное меню"
     стоп
 
 при нажатии "Киев":
     fetch "https://wttr.in/Kiev?format=3&lang=ru" → raw
-    ответ "🌍 Киев, Украина\\n🌡 {raw}"
+    ответ "🌍 Киев, Украина\n🌡 {raw}"
     кнопки "🔄 Обновить" "🏠 Главное меню"
     стоп
 
 при нажатии "Львов":
     fetch "https://wttr.in/Lviv?format=3&lang=ru" → raw
-    ответ "🌍 Львов, Украина\\n🌡 {raw}"
+    ответ "🌍 Львов, Украина\n🌡 {raw}"
     кнопки "🔄 Обновить" "🏠 Главное меню"
     стоп
 
 при нажатии "Информация о боте":
-    ответ "🤖 Этот бот показывает актуальную погоду онлайн для выбранного города.\\nДанные предоставляет wttr.in"
+    ответ "🤖 Этот бот показывает актуальную погоду онлайн для выбранного города.\nДанные предоставляет wttr.in"
     кнопки:
         ["Запорожье", "Киев"]
         ["Львов", "🏠 Главное меню"]
@@ -2309,7 +2396,7 @@ export default function App() {
     стоп
 `
 
-  const EXAMPLE_SHOP = "версия \"1.0\"\nбот \"\"\nкоманды:\n    \"/start\" - \"🚀 Запуск\"\n    \"/catalog\" - \"📦 Каталог\"\n    \"/cart\" - \"🛒 Корзина\"\n    \"/order\" - \"📋 Заказ\"\nглобально магазин_открыт = истина\n\nпри команде \"/order\":\n    перейти \"оформление\"\n\nпри нажатии \"📦 Ещё товары\":\n    перейти \"/catalog\"\n\nпри нажатии \"❌ Отменить заказ\":\n    ответ \"❌ Оформление отменено\"\n    использовать приветствие\n\nпри нажатии \"🍎 Яблоки — 100₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍎 Яблоки — 100₽\"\n    иначе:\n        запомни корзина = корзина + \"\\n• 🍎 Яблоки — 100₽\"\n    запомни итого = итого + 100\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍎 Яблоки добавлены в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"📋 Заказ\":\n    перейти \"/order\"\n\nиначе:\n        ответ \"🤔 Не понимаю '{текст}'\"\n        ответ \"Используйте кнопки меню\"\n        кнопки \"🏠 Главная\"\n\nпри нажатии \"🍌 Бананы — 80₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍌 Бананы — 80₽\"\n    иначе:\n        запомни корзина = корзина + \"\\n• 🍌 Бананы — 80₽\"\n    запомни итого = итого + 80\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍌 Бананы добавлены в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"📋 Оформить заказ\":\n    перейти \"оформление\"\n\nпри нажатии \"🍊 Апельсины — 120₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍊 Апельсины — 120₽\"\n    иначе:\n        запомни корзина = корзина + \"\\n• 🍊 Апельсины — 120₽\"\n    запомни итого = итого + 120\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍊 Апельсины добавлены в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"🔙 Назад\":\n    использовать приветствие\n\nпри старте:\n    если магазин_открыт == истина:\n        использовать приветствие\n    иначе:\n        ответ \"🚫 Магазин закрыт на обслуживание. Скоро вернёмся!\"\n        стоп\n\nпри нажатии \"🍇 Виноград — 200₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍇 Виноград — 200₽\"\n    иначе:\n        запомни корзина = корзина + \"\\n• 🍇 Виноград — 200₽\"\n    запомни итого = итого + 200\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍇 Виноград добавлен в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"🏠 Главная\":\n    использовать приветствие\n\nблок приветствие:\n    ответ \"👋 Привет, {пользователь.имя}! Добро пожаловать в наш магазин 🛍️\"\n    ответ \"Выберите раздел:\"\n    кнопки:\n        [\"📦 Каталог\", \"🛒 Корзина\"]\n        [\"📋 Заказ\", \"❓ Помощь\"]\n\nпри нажатии \"🗑️ Очистить корзину\":\n    сохранить \"корзина\" = \"\"\n    сохранить \"итого\" = 0\n    сохранить \"адрес\" = \"\"\n    ответ \"🗑️ Корзина очищена\"\n    кнопки \"📦 Каталог\"\n\nпри нажатии \"❓ Помощь\":\n    ответ \"❓ Помощь:\"\n    ответ \"• /catalog — посмотреть товары\"\n    ответ \"• /cart — ваша корзина\"\n    ответ \"• /order — оформить заказ\"\n    кнопки \"🏠 Главная\"\n\nпри команде \"/catalog\":\n    ответ \"📦 Наши товары:\"\n    кнопки:\n        [\"🍎 Яблоки — 100₽\", \"🍌 Бананы — 80₽\"]\n        [\"🍊 Апельсины — 120₽\", \"🍇 Виноград — 200₽\"]\n        [\"🔙 Назад\"]\n\nпри нажатии \"🛒 Корзина\":\n    перейти \"/cart\"\n\nсценарий оформление:\n    шаг проверка:\n        получить \"корзина\" → корзина\n    если не корзина:\n        ответ \"🛒 Корзина пуста! Сначала выберите товар.\"\n        кнопки \"📦 Каталог\"\n        стоп\n    шаг адрес:\n        спросить \"🏠 Укажите адрес доставки:\" → введённый_адрес\n    шаг подтверждение:\n        сохранить \"адрес\" = введённый_адрес\n        получить \"корзина\" → корзина\n        получить \"итого\" → итого\n        ответ \"📋 Подтвердите заказ:\\n{корзина}\\nСумма: {итого}₽\\nАдрес: {введённый_адрес}\"\n        кнопки \"✅ Подтвердить заказ\" \"❌ Отменить заказ\"\n        стоп\n\nпри команде \"/cart\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не корзина:\n        ответ \"🛒 Корзина пуста\"\n        ответ \"Перейдите в каталог и выберите товар\"\n        кнопки \"📦 Каталог\" \"🏠 Главная\"\n    иначе:\n        ответ \"🛒 Ваша корзина:\\n{корзина}\\nИтого: {итого}₽\"\n        кнопки:\n            [\"📋 Оформить заказ\", \"🗑️ Очистить корзину\"]\n            [\"📦 Ещё товары\"]\n\nпри нажатии \"📦 Каталог\":\n    перейти \"/catalog\"\n\nпри нажатии \"✅ Подтвердить заказ\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    получить \"адрес\" → адр\n    ответ \"✅ Заказ принят!\\n{корзина}\\nСумма: {итого}₽\\nАдрес: {адр}\\nСкоро свяжемся с вами 📞\"\n    сохранить \"корзина\" = \"\"\n    сохранить \"итого\" = 0\n    сохранить \"адрес\" = \"\"\n    кнопки \"🏠 Главная\"\n";
+  const EXAMPLE_SHOP = "версия \"1.0\"\nбот \"\"\nкоманды:\n    \"/start\" - \"🚀 Запуск\"\n    \"/catalog\" - \"📦 Каталог\"\n    \"/cart\" - \"🛒 Корзина\"\n    \"/order\" - \"📋 Заказ\"\nглобально магазин_открыт = истина\n\nпри команде \"/order\":\n    перейти \"оформление\"\n\nпри нажатии \"📦 Ещё товары\":\n    перейти \"/catalog\"\n\nпри нажатии \"❌ Отменить заказ\":\n    ответ \"❌ Оформление отменено\"\n    использовать приветствие\n\nпри нажатии \"🍎 Яблоки — 100₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍎 Яблоки — 100₽\"\n    иначе:\n        запомни корзина = корзина + \"\n• 🍎 Яблоки — 100₽\"\n    запомни итого = итого + 100\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍎 Яблоки добавлены в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"📋 Заказ\":\n    перейти \"/order\"\n\nиначе:\n        ответ \"🤔 Не понимаю '{текст}'\"\n        ответ \"Используйте кнопки меню\"\n        кнопки \"🏠 Главная\"\n\nпри нажатии \"🍌 Бананы — 80₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍌 Бананы — 80₽\"\n    иначе:\n        запомни корзина = корзина + \"\n• 🍌 Бананы — 80₽\"\n    запомни итого = итого + 80\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍌 Бананы добавлены в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"📋 Оформить заказ\":\n    перейти \"оформление\"\n\nпри нажатии \"🍊 Апельсины — 120₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍊 Апельсины — 120₽\"\n    иначе:\n        запомни корзина = корзина + \"\n• 🍊 Апельсины — 120₽\"\n    запомни итого = итого + 120\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍊 Апельсины добавлены в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"🔙 Назад\":\n    использовать приветствие\n\nпри старте:\n    если магазин_открыт == истина:\n        использовать приветствие\n    иначе:\n        ответ \"🚫 Магазин закрыт на обслуживание. Скоро вернёмся!\"\n        стоп\n\nпри нажатии \"🍇 Виноград — 200₽\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не итого:\n        запомни итого = 0\n    если не корзина:\n        запомни корзина = \"• 🍇 Виноград — 200₽\"\n    иначе:\n        запомни корзина = корзина + \"\n• 🍇 Виноград — 200₽\"\n    запомни итого = итого + 200\n    сохранить \"корзина\" = корзина\n    сохранить \"итого\" = итого\n    ответ \"🍇 Виноград добавлен в корзину!\"\n    кнопки \"🛒 Корзина\" \"📦 Ещё товары\"\n\nпри нажатии \"🏠 Главная\":\n    использовать приветствие\n\nблок приветствие:\n    ответ \"👋 Привет, {пользователь.имя}! Добро пожаловать в наш магазин 🛍️\"\n    ответ \"Выберите раздел:\"\n    кнопки:\n        [\"📦 Каталог\", \"🛒 Корзина\"]\n        [\"📋 Заказ\", \"❓ Помощь\"]\n\nпри нажатии \"🗑️ Очистить корзину\":\n    сохранить \"корзина\" = \"\"\n    сохранить \"итого\" = 0\n    сохранить \"адрес\" = \"\"\n    ответ \"🗑️ Корзина очищена\"\n    кнопки \"📦 Каталог\"\n\nпри нажатии \"❓ Помощь\":\n    ответ \"❓ Помощь:\"\n    ответ \"• /catalog — посмотреть товары\"\n    ответ \"• /cart — ваша корзина\"\n    ответ \"• /order — оформить заказ\"\n    кнопки \"🏠 Главная\"\n\nпри команде \"/catalog\":\n    ответ \"📦 Наши товары:\"\n    кнопки:\n        [\"🍎 Яблоки — 100₽\", \"🍌 Бананы — 80₽\"]\n        [\"🍊 Апельсины — 120₽\", \"🍇 Виноград — 200₽\"]\n        [\"🔙 Назад\"]\n\nпри нажатии \"🛒 Корзина\":\n    перейти \"/cart\"\n\nсценарий оформление:\n    шаг проверка:\n        получить \"корзина\" → корзина\n    если не корзина:\n        ответ \"🛒 Корзина пуста! Сначала выберите товар.\"\n        кнопки \"📦 Каталог\"\n        стоп\n    шаг адрес:\n        спросить \"🏠 Укажите адрес доставки:\" → введённый_адрес\n    шаг подтверждение:\n        сохранить \"адрес\" = введённый_адрес\n        получить \"корзина\" → корзина\n        получить \"итого\" → итого\n        ответ \"📋 Подтвердите заказ:\n{корзина}\nСумма: {итого}₽\nАдрес: {введённый_адрес}\"\n        кнопки \"✅ Подтвердить заказ\" \"❌ Отменить заказ\"\n        стоп\n\nпри команде \"/cart\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    если не корзина:\n        ответ \"🛒 Корзина пуста\"\n        ответ \"Перейдите в каталог и выберите товар\"\n        кнопки \"📦 Каталог\" \"🏠 Главная\"\n    иначе:\n        ответ \"🛒 Ваша корзина:\n{корзина}\nИтого: {итого}₽\"\n        кнопки:\n            [\"📋 Оформить заказ\", \"🗑️ Очистить корзину\"]\n            [\"📦 Ещё товары\"]\n\nпри нажатии \"📦 Каталог\":\n    перейти \"/catalog\"\n\nпри нажатии \"✅ Подтвердить заказ\":\n    получить \"корзина\" → корзина\n    получить \"итого\" → итого\n    получить \"адрес\" → адр\n    ответ \"✅ Заказ принят!\n{корзина}\nСумма: {итого}₽\nАдрес: {адр}\nСкоро свяжемся с вами 📞\"\n    сохранить \"корзина\" = \"\"\n    сохранить \"итого\" = 0\n    сохранить \"адрес\" = \"\"\n    кнопки \"🏠 Главная\"\n";
 
 const EXAMPLE_FULL = `версия "1.0"
 бот "0000000000:PASTE_YOUR_BOTFATHER_TOKEN_HERE"
@@ -2598,7 +2685,7 @@ const EXAMPLE_FULL = `версия "1.0"
     запомни намерение = "other"
     запрос_бд "select 1 as full_test" → rows
     классифицировать ["support", "sales", "other"] → намерение
-    ответ "🌐 API проверены. GET: {api_get}\\nPOST: {api_post}\\nPATCH: {api_patch}\\nPUT: {api_put}\\nDELETE: {api_delete}\\nSQL: {rows}\\nIntent: {намерение}"
+    ответ "🌐 API проверены. GET: {api_get}\nPOST: {api_post}\nPATCH: {api_patch}\nPUT: {api_put}\nDELETE: {api_delete}\nSQL: {rows}\nIntent: {намерение}"
     использовать full_test_меню
 
 при нажатии "🌐 API":
@@ -2736,7 +2823,7 @@ const EXAMPLE_FULL = `версия "1.0"
         ['step', { name: 'сохранение' }],
         ['set_global', {
           varname: 'товары',
-          value: 'добавить(товары, "📦 " + название + "\\n💰 " + цена + "₽\\n📝 " + описание)',
+          value: 'добавить(товары, "📦 " + название + "\n💰 " + цена + "₽\n📝 " + описание)',
         }],
         ['message', {
           text: '✅ Товар добавлен',
@@ -2956,13 +3043,23 @@ const EXAMPLE_FULL = `версия "1.0"
       const myBot = list.find(b => b.userId === userId);
       if (myBot) {
         setIsBotRunning(true);
-        if (myBot.startedAt) {
+        setBotRunMode(myBot.mode === 'server' ? 'server' : 'sandbox');
+        if (myBot.mode === 'server' && myBot.runsUntil) {
+          const remaining = Math.max(0, Math.floor((Number(myBot.runsUntil) - Date.now()) / 1000));
+          if (remaining > 0) startCountdown(remaining);
+          else {
+            if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
+            setAutoStopSecondsLeft(null);
+          }
+        } else if (myBot.startedAt) {
+          const timeoutSec = Math.floor((Number(myBot.timeoutMs) || 300000) / 1000);
           const elapsed = Math.floor((Date.now() - myBot.startedAt) / 1000);
-          const remaining = Math.max(0, 300 - elapsed);
+          const remaining = Math.max(0, timeoutSec - elapsed);
           if (remaining > 0) startCountdown(remaining);
         }
       } else {
         setIsBotRunning(false);
+        setBotRunMode(null);
         if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
         setAutoStopSecondsLeft(null);
       }
@@ -3421,8 +3518,7 @@ const EXAMPLE_FULL = `версия "1.0"
     return () => { cancelled = true; clearInterval(id); };
   }, [botDebugOpen, getRuntimeUserId]);
 
-  // Start bot
-  const startBot = useCallback(async () => {
+  const runBot = useCallback(async (mode = 'sandbox') => {
     setIsStartingBot(true);
     setStartBotError(null);
     try {
@@ -3433,11 +3529,25 @@ const EXAMPLE_FULL = `версия "1.0"
         setStartBotError('Войдите в аккаунт, чтобы запустить бота');
         return;
       }
+      if (mode === 'server') {
+        if (!isProjectMode || !activeProjectId) {
+          setStartBotError(builderUi.startServerNeedsProject);
+          return;
+        }
+        if (!hasActiveProSubscription) {
+          openPremiumPurchase();
+          setStartBotError(builderUi.startServerNeedsPremium);
+          return;
+        }
+      }
       const code = generateBotDSL();
-      const response = await postJsonWithCsrf('/api/run', { code, userId });
+      const payload = { code, userId, mode };
+      if (mode === 'server') payload.projectId = activeProjectId;
+      const response = await postJsonWithCsrf('/api/run', payload);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) {
         let msg = data.error || `Ошибка запуска (HTTP ${response.status})`;
+        if (data.needsPremium) openPremiumPurchase();
         const d = data.details || {};
         if (d.logTail) {
           msg += `\n\nЛог:\n${d.logTail}`;
@@ -3448,17 +3558,42 @@ const EXAMPLE_FULL = `версия "1.0"
         return;
       }
       setIsBotRunning(true);
+      setBotRunMode(data.mode === 'server' ? 'server' : 'sandbox');
       setBotDebugLogs('');
       setBotDebugOpen(true);
-      showToast('✅ Бот запущен: ' + (data.name || data.bot), 'success');
-      // Start client-side countdown from server's autoStopIn value
+      showToast(
+        data.mode === 'server' ? '☁ Бот запущен на сервере (Premium)' : '✅ Бот запущен: ' + (data.name || data.bot),
+        'success',
+      );
+      if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
       if (data.autoStopIn) startCountdown(data.autoStopIn);
+      else if (data.runsUntil) {
+        const remaining = Math.max(0, Math.floor((Number(data.runsUntil) - Date.now()) / 1000));
+        if (remaining > 0) startCountdown(remaining);
+        else setAutoStopSecondsLeft(null);
+      } else {
+        setAutoStopSecondsLeft(null);
+      }
     } catch (e) {
       setStartBotError(e.message);
     } finally {
       setIsStartingBot(false);
     }
-  }, [generateBotDSL, showToast, getRuntimeUserId, startCountdown]);
+  }, [
+    generateBotDSL,
+    showToast,
+    getRuntimeUserId,
+    startCountdown,
+    isProjectMode,
+    activeProjectId,
+    hasActiveProSubscription,
+    builderUi.startServerNeedsProject,
+    builderUi.startServerNeedsPremium,
+    openPremiumPurchase,
+  ]);
+
+  const startBot = useCallback(() => runBot('sandbox'), [runBot]);
+  const startBotOnServer = useCallback(() => runBot('server'), [runBot]);
 
   // Stop bot
   const stopBot = useCallback(async () => {
@@ -3480,6 +3615,7 @@ const EXAMPLE_FULL = `версия "1.0"
         return;
       }
       setIsBotRunning(false);
+      setBotRunMode(null);
       if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
       setAutoStopSecondsLeft(null);
       showToast('⛔ Бот остановлен', 'info');
@@ -4200,9 +4336,8 @@ const EXAMPLE_FULL = `версия "1.0"
         box-shadow:0 0 18px rgba(251,191,36,.16);
       }
       .tb-files-menu {
-        position: absolute; top: calc(100% + 6px); left: 0;
         background: var(--bg2); border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 10px; min-width: 186px; z-index: 100;
+        border-radius: 10px; min-width: 186px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.6); overflow: hidden;
       }
       .tb-files-menu-item {
@@ -4273,7 +4408,7 @@ const EXAMPLE_FULL = `версия "1.0"
         boxShadow: '0 1px 0 rgba(249,115,22,0.08), 0 4px 24px rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'center', padding: isMobileView ? '0 8px' : '0 18px', gap: isMobileView ? 6 : 10,
         flexShrink: 0, height: isMobileView ? 52 : 64,
-        overflowX: 'hidden',
+        overflow: 'visible',
         position: 'relative', zIndex: 90,
       }}>
         {/* Left neon accent line */}
@@ -4326,52 +4461,14 @@ const EXAMPLE_FULL = `версия "1.0"
             <div className="tb-divider" />
             <div style={{ position: 'relative' }}>
             <button
+              ref={filesMenuToggleRef}
               className="tb-btn tb-btn-ghost"
               data-tour="top-files-desktop"
-              title={builderUi.filesMenuTitle}
+              title={showFilesMenu ? undefined : builderUi.filesMenuTitle}
+              aria-expanded={showFilesMenu}
+              aria-haspopup="menu"
               onClick={() => setShowFilesMenu(v => !v)}
             >📁 <span style={{ opacity: 0.5, fontSize: 10 }}>▼</span></button>
-              {showFilesMenu && (
-                <>
-                  <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowFilesMenu(false)} />
-                  <div className="tb-files-menu">
-                    <button className="tb-files-menu-item" onClick={() => { saveProject(); setShowFilesMenu(false); }}>
-                      <span style={{ color: '#3ecf8e' }}>💾</span> {builderUi.saveFile}
-                    </button>
-                    {currentUser && (
-                      <button
-                        className="tb-files-menu-item"
-                        onClick={async () => {
-                          const name = projectName.trim() || 'Без названия';
-                          await saveProjectToCloud(currentUser.id, name, stacks);
-                          await loadUserProjects(currentUser.id);
-                          showToast('☁ Проект сохранён в облако: ' + name, 'success');
-                          setShowFilesMenu(false);
-                        }}
-                      >
-                        <span style={{ color: '#3ecf8e' }}>☁</span> {builderUi.saveCloud}
-                      </button>
-                    )}
-                    <button className="tb-files-menu-item" onClick={() => { loadProject(); setShowFilesMenu(false); }}>
-                      <span style={{ color: '#60a5fa' }}>📂</span> {builderUi.loadFile}
-                    </button>
-                    <button
-                      className={`tb-files-menu-item${canSeeCode ? '' : ' locked-premium'}`}
-                      onClick={() => {
-                        setShowFilesMenu(false);
-                        if (!canSeeCode) {
-                          openPremiumPurchase();
-                          return;
-                        }
-                        loadCCD();
-                      }}
-                      title={canSeeCode ? builderUi.openCcd : 'Доступно в Pro'}
-                    >
-                      <span style={{ color: canSeeCode ? '#a78bfa' : '#fbbf24' }}>{canSeeCode ? '↑' : '🔒'}</span> {builderUi.openCcd}
-                    </button>
-                  </div>
-                </>
-              )}
             </div>
             <button
               className="tb-btn tb-btn-ghost"
@@ -4390,7 +4487,21 @@ const EXAMPLE_FULL = `версия "1.0"
               style={botDebugOpen ? { outline: '1px solid rgba(250,204,21,0.45)', borderRadius: 8 } : undefined}
             >🧾</button>
             <div className="tb-divider" />
+            {isProjectMode && (
+              <div
+                title={builderUi.projectFilesNote}
+                style={{
+                  fontSize: 10, fontWeight: 700, padding: '5px 10px', borderRadius: 8,
+                  color: '#3ecf8e', background: 'rgba(62,207,142,0.1)',
+                  border: '1px solid rgba(62,207,142,0.25)', maxWidth: 180,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+              >
+                {builderUi.projectBadge(projectName.trim() || '…')}
+              </div>
+            )}
             {!isBotRunning ? (
+              <>
               <button
                 className="tb-btn tb-btn-run"
                 data-tour="run-desktop"
@@ -4398,6 +4509,24 @@ const EXAMPLE_FULL = `версия "1.0"
                 disabled={!stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== ''))}
                 title={!stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== '')) ? builderUi.addBotTokenTitle : ''}
               >{builderUi.start}</button>
+              {isProjectMode && (
+                <button
+                  className="tb-btn tb-btn-ghost"
+                  type="button"
+                  onClick={startBotOnServer}
+                  disabled={
+                    isStartingBot
+                    || !hasActiveProSubscription
+                    || !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== ''))
+                  }
+                  title={hasActiveProSubscription ? builderUi.projectFilesNote : builderUi.startServerNeedsPremium}
+                  style={{
+                    color: hasActiveProSubscription ? '#38bdf8' : 'rgba(148,163,184,0.6)',
+                    border: '1px solid rgba(56,189,248,0.35)',
+                  }}
+                >{builderUi.startOnServer}</button>
+              )}
+              </>
             ) : (
               <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:6, background:'rgba(62,207,142,0.08)', border:'1px solid rgba(62,207,142,0.2)', borderRadius:8, padding:'5px 10px' }}>
@@ -4408,9 +4537,11 @@ const EXAMPLE_FULL = `версия "1.0"
                     flexShrink:0,
                   }} />
                   <span style={{ fontSize:11, color:'#3ecf8e', fontFamily:'var(--mono)', letterSpacing:'0.02em' }}>
-                    {autoStopSecondsLeft !== null
-                      ? builderUi.autoStop(Math.floor(autoStopSecondsLeft/60), String(autoStopSecondsLeft%60).padStart(2,'0'))
-                      : builderUi.running}
+                    {botRunMode === 'server'
+                      ? builderUi.serverRunning
+                      : autoStopSecondsLeft !== null
+                        ? builderUi.autoStop(Math.floor(autoStopSecondsLeft/60), String(autoStopSecondsLeft%60).padStart(2,'0'))
+                        : builderUi.running}
                   </span>
                 </div>
                 <button
@@ -4702,10 +4833,20 @@ const EXAMPLE_FULL = `версия "1.0"
           onUpgrade={() => { setShowLibrary(false); openPremiumPurchase(); }}
           onClose={() => setShowLibrary(false)}
           onInsert={(code) => {
-            const parsed = parseDSL(code);
-            if (parsed) {
-              setStacks(prev => mergeLibraryStacks(prev, parsed));
-              showToast(builderUi.libInsertSuccess, 'success');
+            try {
+              console.log('Inserting code from library...', code.substring(0, 100));
+              const parsed = parseDSL(code);
+              console.log('Parsed stacks:', parsed);
+              if (parsed) {
+                setStacks(prev => mergeLibraryStacks(prev, parsed));
+                showToast(builderUi.libInsertSuccess, 'success');
+              } else {
+                console.warn('Parse result was null or empty');
+                showToast('Ошибка парсинга кода', 'error');
+              }
+            } catch (err) {
+              console.error('Error in onInsert:', err);
+              showToast('Ошибка при вставке кода: ' + err.message, 'error');
             }
             setShowLibrary(false);
           }}
@@ -5383,6 +5524,68 @@ const EXAMPLE_FULL = `версия "1.0"
         <BlockInfoModal block={blockInfo} onClose={() => setBlockInfo(null)} />
       )}
 
+      
+      {showFilesMenu && typeof document !== 'undefined' && filesMenuRect && createPortal(
+        <>
+          <div
+            role="presentation"
+            style={{ position: 'fixed', inset: 0, zIndex: 10050 }}
+            onClick={() => setShowFilesMenu(false)}
+          />
+          <div
+            role="menu"
+            className="tb-files-menu"
+            style={{
+              position: 'fixed',
+              top: filesMenuRect.top,
+              left: filesMenuRect.left,
+              minWidth: filesMenuRect.minWidth,
+              zIndex: 10051,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button type="button" className="tb-files-menu-item" onClick={() => { saveProject(); setShowFilesMenu(false); }}>
+              <span style={{ color: '#3ecf8e' }}>💾</span> {builderUi.saveFile}
+            </button>
+            {currentUser && (
+              <button
+                type="button"
+                className="tb-files-menu-item"
+                onClick={async () => {
+                  const name = projectName.trim() || 'Без названия';
+                  const saved = await saveProjectToCloud(currentUser.id, name, stacks);
+                  if (saved?.id) setActiveProjectId(saved.id);
+                  await loadUserProjects(currentUser.id);
+                  showToast('☁ Проект сохранён в облако: ' + name, 'success');
+                  setShowFilesMenu(false);
+                }}
+              >
+                <span style={{ color: '#3ecf8e' }}>☁</span> {builderUi.saveCloud}
+              </button>
+            )}
+            <button type="button" className="tb-files-menu-item" onClick={() => { loadProject(); setShowFilesMenu(false); }}>
+              <span style={{ color: '#60a5fa' }}>📂</span> {builderUi.loadFile}
+            </button>
+            <button
+              type="button"
+              className={`tb-files-menu-item${canSeeCode ? '' : ' locked-premium'}`}
+              onClick={() => {
+                setShowFilesMenu(false);
+                if (!canSeeCode) {
+                  openPremiumPurchase();
+                  return;
+                }
+                loadCCD();
+              }}
+              title={canSeeCode ? builderUi.openCcd : 'Доступно в Pro'}
+            >
+              <span style={{ color: canSeeCode ? '#a78bfa' : '#fbbf24' }}>{canSeeCode ? '↑' : '🔒'}</span> {builderUi.openCcd}
+            </button>
+          </div>
+        </>,
+        document.body,
+      )}
+
       {showExamples && typeof document !== 'undefined' && createPortal(
         <>
           <div
@@ -5514,7 +5717,8 @@ const EXAMPLE_FULL = `версия "1.0"
                 role="menuitem"
                 onClick={async () => {
                   const name = projectName.trim() || 'Без названия';
-                  await saveProjectToCloud(currentUser.id, name, stacks);
+                  const saved = await saveProjectToCloud(currentUser.id, name, stacks);
+                  if (saved?.id) setActiveProjectId(saved.id);
                   await loadUserProjects(currentUser.id);
                   showToast('☁ Проект сохранён в облако: ' + name, 'success');
                   setMobileMoreOpen(false);
@@ -5564,6 +5768,18 @@ const EXAMPLE_FULL = `версия "1.0"
                 disabled={!stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim()))}
                 style={{ width:'100%', padding:'10px 16px', textAlign:'left', background:'rgba(62,207,142,0.08)', color:'#3ecf8e', border:'none', cursor:'pointer', fontSize:13, fontFamily:'Syne,system-ui', fontWeight:700, display:'flex', alignItems:'center', gap:8, opacity: stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim())) ? 1 : 0.4 }}
               >{builderUi.mobileStartBot}</button>
+            )}
+            {!isBotRunning && isProjectMode && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { startBotOnServer(); setMobileMoreOpen(false); }}
+                disabled={
+                  !hasActiveProSubscription
+                  || !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim()))
+                }
+                style={{ width:'100%', padding:'10px 16px', textAlign:'left', background:'rgba(56,189,248,0.08)', color:'#38bdf8', border:'none', cursor:'pointer', fontSize:13, fontFamily:'Syne,system-ui', fontWeight:700, display:'flex', alignItems:'center', gap:8, opacity: hasActiveProSubscription ? 1 : 0.45 }}
+              >☁ {builderUi.startOnServer}</button>
             )}
             <button
               type="button"
@@ -5915,6 +6131,9 @@ const EXAMPLE_FULL = `версия "1.0"
                   onAttachmentChange={handleAttachmentChange}
                   onAttachmentDelete={handleAttachmentDelete}
                   stacks={stacks}
+                  projectId={activeProjectId || ''}
+                  isProjectMode={isProjectMode}
+                  hasActiveProSubscription={hasActiveProSubscription}
                 />
               </div>
             </>
@@ -6086,7 +6305,9 @@ const EXAMPLE_FULL = `версия "1.0"
             if (project) {
               setStacks(normalizeStudioStacks(project.stacks));
               setProjectName(project.name);
+              setActiveProjectId(project.id);
               setShowProfileModal(false);
+              showToast(`📁 ${builderUi.projectBadge(project.name)}`, 'info');
             }
           }}
           onDeleteProject={async (projectId) => {
@@ -6098,7 +6319,8 @@ const EXAMPLE_FULL = `версия "1.0"
           }}
           onSaveToCloud={async (name) => {
             const n = name || projectName.trim() || 'Без названия';
-            await saveProjectToCloud(currentUser.id, n, stacks);
+            const saved = await saveProjectToCloud(currentUser.id, n, stacks);
+            if (saved?.id) setActiveProjectId(saved.id);
             await loadUserProjects(currentUser.id);
             showToast('☁ Сохранено: ' + n, 'success');
           }}

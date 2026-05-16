@@ -29,7 +29,7 @@ function flowPortFor(type, dir) {
 
 function semanticPortType(node) {
   if (!node) return GRAPH_PORT_TYPES.FLOW;
-  if (node.type === 'condition' || node.type === 'switch' || node.type === 'loop') return GRAPH_PORT_TYPES.CONDITION;
+  if (node.type === 'condition' || node.type === 'condition_not' || node.type === 'switch' || node.type === 'loop') return GRAPH_PORT_TYPES.CONDITION;
   if (node.category === 'render') return GRAPH_PORT_TYPES.MESSAGE;
   if (node.category === 'media') return GRAPH_PORT_TYPES.MEDIA;
   if (node.category === 'action' || node.category === 'telegram' || node.category === 'data') return GRAPH_PORT_TYPES.ACTION;
@@ -241,7 +241,7 @@ function canonicalPortFor(blockType, dir) {
 
 function semanticPortType(node) {
   const category = getBlockDefinition(node?.type)?.category || node?.category || 'action';
-  if (node?.type === 'condition' || node?.type === 'switch' || node?.type === 'loop') return GRAPH_PORT_TYPES.CONDITION;
+  if (node?.type === 'condition' || node?.type === 'condition_not' || node?.type === 'switch' || node?.type === 'loop') return GRAPH_PORT_TYPES.CONDITION;
   if (category === 'render') return GRAPH_PORT_TYPES.MESSAGE;
   if (category === 'media') return GRAPH_PORT_TYPES.MEDIA;
   if (category === 'action' || category === 'telegram' || category === 'data') return GRAPH_PORT_TYPES.ACTION;
@@ -309,7 +309,7 @@ export function selectNodePorts(projectGraph, nodeId) {
   }
 
   if (output != null) {
-    if (node.type === 'condition') {
+    if (node.type === 'condition' || node.type === 'condition_not') {
       outputs.push(makePort(node, {
         direction: 'out',
         id: 'true',
@@ -452,7 +452,7 @@ export function selectInvalidNodes(projectGraph) {
     if (node.type === 'message' && !String(props.text || '').trim()) {
       invalid.push({ nodeId: node.id, node, severity: 'error', reason: 'empty message text' });
     }
-    if (node.type === 'condition') {
+    if (node.type === 'condition' || node.type === 'condition_not') {
       const branches = selectConditionBranches(graph, node.id);
       if (!String(props.cond || '').trim()) invalid.push({ nodeId: node.id, node, severity: 'error', reason: 'empty condition' });
       if (!branches.true || !branches.false) invalid.push({ nodeId: node.id, node, severity: 'warning', reason: 'dead branch' });

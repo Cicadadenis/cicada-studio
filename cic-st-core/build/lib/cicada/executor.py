@@ -1355,7 +1355,7 @@ class Executor:
 
     def _resolve_chat_id(self, chat_id: int | None) -> int:
         """Resolve chat_id or fallback to DEFAULT_CHAT_ID env var. Raises CicadaRuntimeError if missing/invalid."""
-        resolved = chat_id or _os.environ.get("DEFAULT_CHAT_ID")
+        resolved = _os.environ.get("DEFAULT_CHAT_ID") if chat_id in (None, "") else chat_id
         if resolved in (None, ""):
             raise CicadaRuntimeError("chat_id не задан для отправки сообщения")
         try:
@@ -1384,15 +1384,7 @@ class Executor:
         Если chat_id не передан — пытаемся взять из окружения `DEFAULT_CHAT_ID`.
         Если chat_id всё ещё не задан — выдаём подробную ошибку.
         """
-        # Разрешаем fallback на DEFAULT_CHAT_ID из окружения
-        resolved_chat = chat_id or _os.environ.get("DEFAULT_CHAT_ID")
-        if resolved_chat in (None, ""):
-            raise CicadaRuntimeError("chat_id не задан для отправки медиа")
-        try:
-            resolved_chat = int(resolved_chat)
-        except Exception:
-            raise CicadaRuntimeError(f"chat_id не является числом: {resolved_chat!r}")
-
+        resolved_chat = self._resolve_chat_id(chat_id)
         self._emit_effect(MediaEffect(resolved_chat, media_type, file, caption))
         method = getattr(self.tg, f"send_{media_type}")
         if media_type == "sticker":

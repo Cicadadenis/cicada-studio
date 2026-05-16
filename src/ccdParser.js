@@ -1,3 +1,5 @@
+import { isConditionLikeType, parseIfConditionFromDsl } from '../core/dslCondition.js';
+
 const ROOT_KEYWORDS = ['версия', 'бот', 'команды:', 'глобально', 'блок', 'до каждого:', 'после каждого:', 'при старте:', 'старт:', 'при команде', 'команда', 'при нажатии', 'при фото:', 'при документе:', 'при геолокации:', 'сценарий'];
 
 export const FLOW_PORTS = {
@@ -20,6 +22,7 @@ export const FLOW_PORTS = {
   inline_db:   { input: 'flow',         output: 'flow'         },
   use:         { input: 'flow',         output: 'flow'         },
   condition:   { input: 'flow',         output: 'flow'         },
+  condition_not: { input: 'flow',       output: 'flow'         },
   ask:         { input: 'flow',         output: 'flow'         },
   remember:    { input: 'flow',         output: 'flow'         },
   get:         { input: 'flow',         output: 'flow'         },
@@ -161,7 +164,10 @@ function parseNode(line) {
   // ── Сообщение и навигация ───────────────────────────────────────────────
   if (t.startsWith('ответ ')) return { type: 'message', props: { text: stripQuotes(t.replace(/^ответ(_md)?/, '').trim()) }, root: false };
   if (t.startsWith('использовать ')) return { type: 'use', props: { blockname: t.replace('использовать', '').trim() }, root: false };
-  if (t.startsWith('если ')) return { type: 'condition', props: { cond: t.replace(/^если\s+/, '').replace(/:$/, '') }, root: false };
+  if (t.startsWith('если ')) {
+    const inner = t.replace(/^если\s+/, '').replace(/:$/, '');
+    return { ...parseIfConditionFromDsl(inner), root: false };
+  }
 
   // ── Вопрос ──────────────────────────────────────────────────────────────
   if (t.startsWith('спросить ')) {

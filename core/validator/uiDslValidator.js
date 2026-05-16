@@ -2,6 +2,12 @@ import { analyzeDslControlFlow } from './uiFlowAnalysis.js';
 import { lintDSLSchema, formatDSLDiagnostic } from './schema.js';
 import { INLINE_BLOCK_HEADERS, isRuntimeVar } from '../runtime/rules.js';
 
+/** Строка `inline из бд "…" callback … назад … колонки N` — не разбираем как выражение с переменными. */
+export function isInlineDbInstructionLine(line) {
+  const l = String(line || '').trim();
+  return /^inline(?:-кнопки)?\s+из\s+бд\s+/i.test(l);
+}
+
 export function getLineIndent(rawLine) {
   return (rawLine.replace(/\t/g, '    ').match(/^(\s*)/)?.[1]?.length) ?? 0;
 }
@@ -280,7 +286,8 @@ export function validateDSL(code, stacks, blockTypes = []) {
     'секунд','подождать','вызвать','проверить','подписку','роль','переслать',
     'сообщение','уведомить','рассылка','группе','RUB',
     'нажатии','команда','команде','версия','бот','команды','до','после','каждого','старте',
-    'inline', 'true', 'false', 'null', 'истина', 'ложь', 'пусто',
+    'inline', 'бд', 'callback', 'назад', 'колонки', 'текст', 'id',
+    'true', 'false', 'null', 'истина', 'ложь', 'пусто',
     // уровни логирования
     'info', 'debug', 'error', 'warn', 'warning',
     // HTTP методы
@@ -321,6 +328,8 @@ export function validateDSL(code, stacks, blockTypes = []) {
     // Пропускаем строки-триггеры событий: «при документе:», «при фото:», «до каждого:»
     if (EVENT_TRIGGER.test(l)) return;
     if (/^(?:оплата|уведомить|рассылка|переслать(?:\s+сообщение)?|проверить подписку|роль @)\s+/.test(l)) return;
+    if (isInlineDbInstructionLine(l)) return;
+    if (/^колонки\s+\d+\s*$/i.test(l)) return;
 
     // Переменные в шаблонах {var} — пропускаем вызовы функций {func(args)}
     const tmplMatches = [...l.matchAll(/\{([а-яёА-ЯЁa-zA-Z_][а-яёА-ЯЁa-zA-Z_0-9.]*)\}/g)];

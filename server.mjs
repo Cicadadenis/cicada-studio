@@ -1587,6 +1587,8 @@ async function updateUserAvatar(userId, dataUrl) {
 
 
 
+const PROJECT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
+
 function botUserMediaDir(userId) {
   const safeUserId = String(userId || '');
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(safeUserId)) {
@@ -1597,7 +1599,40 @@ function botUserMediaDir(userId) {
   return path.resolve(BOTS_DIR, safeUserId, 'media');
 }
 
-function saveBotMediaBuffer(buffer, preferredName = 'file', userId = '') {
+function botProjectMediaDir(userId, projectId) {
+  const safeUserId = String(userId || '');
+  const safeProjectId = String(projectId || '');
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(safeUserId)) {
+    const err = new Error('invalid userId');
+    err.publicMessage = 'Некорректный пользователь';
+    throw err;
+  }
+  if (!PROJECT_ID_RE.test(safeProjectId)) {
+    const err = new Error('invalid projectId');
+    err.publicMessage = 'Некорректный проект';
+    throw err;
+  }
+  return path.resolve(BOTS_DIR, safeUserId, 'projects', safeProjectId, 'media');
+}
+
+function botProjectRootDir(userId, projectId) {
+  return path.dirname(botProjectMediaDir(userId, projectId));
+}
+
+async function assertProjectOwned(userId, projectId) {
+  const { rowCount } = await pool.query(
+    'SELECT 1 FROM projects WHERE id=$1 AND user_id=$2',
+    [projectId, userId],
+  );
+  if (!rowCount) {
+    const err = new Error('project not found');
+    err.publicMessage = 'Проект не найден';
+    err.statusCode = 404;
+    throw err;
+  }
+}
+
+function saveBotMediaBuffer(buffer, preferredName = 'file', userId = '', opts = {}) {
   if (!buffer.length) {
     const err = new Error('Пустой файл');
     err.publicMessage = err.message;
@@ -1615,13 +1650,16 @@ function saveBotMediaBuffer(buffer, preferredName = 'file', userId = '') {
     safeBase = safeBase.slice(0, -ext.length - 1);
   }
   safeBase = safeBase.replace(/[^\w.\-]+/g, '_').slice(0, 60) || 'file';
-  const uploadDir = botUserMediaDir(userId);
+  const projectId = opts.projectId ? String(opts.projectId).trim() : '';
+  const uploadDir = projectId ? botProjectMediaDir(userId, projectId) : botUserMediaDir(userId);
   fs.mkdirSync(uploadDir, { recursive: true });
   const fileName = `${Date.now()}-${crypto.randomUUID()}-${safeBase}.${ext}`;
   const filePath = path.join(uploadDir, fileName);
   fs.writeFileSync(filePath, buffer, { flag: 'wx' });
-  setTimeout(() => cleanupBotMediaFiles([filePath]), 10 * 60 * 1000).unref?.();
-  return { fileName, filePath };
+  if (!projectId) {
+    setTimeout(() => cleanupBotMediaFiles([filePath]), 10 * 60 * 1000).unref?.();
+  }
+  return { fileName, filePath, persistent: Boolean(projectId) };
 }
 
 function cleanupBotMediaFiles(files) {
@@ -1629,8 +1667,10 @@ function cleanupBotMediaFiles(files) {
   for (const file of files || []) {
     const resolved = path.resolve(String(file || ''));
     const isLegacyMedia = resolved.startsWith(MEDIA_UPLOAD_DIR + path.sep);
-    const isUserMedia = resolved.startsWith(botsRoot + path.sep) && resolved.includes(`${path.sep}media${path.sep}`);
-    if (!isLegacyMedia && !isUserMedia) continue;
+    const isEphemeralUserMedia = resolved.startsWith(botsRoot + path.sep)
+      && resolved.includes(`${path.sep}media${path.sep}`)
+      && !resolved.includes(`${path.sep}projects${path.sep}`);
+    if (!isLegacyMedia && !isEphemeralUserMedia) continue;
     fs.rm(resolved, { force: true }, () => {});
   }
 }
@@ -1646,7 +1686,53 @@ function mediaFilesFromCode(code) {
   for (const m of text.matchAll(userMediaRe)) {
     found.add(path.resolve(m[1]));
   }
+  const projectMediaRe = /(\/var\/www\/cicada-studio\/bots\/[a-zA-Z0-9_-]{1,64}\/projects\/[a-zA-Z0-9_-]{1,128}\/media\/[^\s"']+)/g;
+  for (const m of text.matchAll(projectMediaRe)) {
+    found.add(path.resolve(m[1]));
+  }
   return [...found];
+}
+
+function rmProjectMediaTree(userId, projectId) {
+  try {
+    fs.rmSync(botProjectRootDir(userId, projectId), { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}
+
+async function cleanupExpiredPremiumProjectMedia() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, user_id AS "userId", subscription_exp AS "subscriptionExp", plan
+       FROM users
+       WHERE plan='pro' AND subscription_exp IS NOT NULL AND subscription_exp < $1`,
+      [Date.now()],
+    );
+    for (const row of rows) {
+      const projectsDir = path.join(BOTS_DIR, row.userId, 'projects');
+      if (!fs.existsSync(projectsDir)) continue;
+      for (const projectId of fs.readdirSync(projectsDir)) {
+        rmProjectMediaTree(row.userId, projectId);
+      }
+    }
+  } catch (e) {
+    console.error('cleanupExpiredPremiumProjectMedia error:', e);
+  }
+}
+
+async function enforcePremiumServerRunners() {
+  for (const bot of listRunners()) {
+    if (bot.mode !== 'server') continue;
+    const user = await findById(bot.userId);
+    if (!user || !isProUser(user)) {
+      if (isRunnerActive(bot.userId)) {
+        stopRunner(bot.userId, { reason: 'subscription_expired' });
+        cleanupBotMediaFiles(activeRunMediaFiles.get(bot.userId) || []);
+        activeRunMediaFiles.delete(bot.userId);
+      }
+    }
+  }
 }
 
 const activeRunMediaFiles = new Map();
@@ -1695,6 +1781,10 @@ function cleanupOldMediaFiles() {
 
 // Run cleanup every 10 minutes
 setInterval(cleanupOldMediaFiles, MEDIA_CLEANUP_INTERVAL);
+setInterval(() => {
+  cleanupExpiredPremiumProjectMedia().catch(() => {});
+  enforcePremiumServerRunners().catch(() => {});
+}, MEDIA_CLEANUP_INTERVAL);
 // Run once on startup
 cleanupOldMediaFiles();
 
@@ -1723,11 +1813,31 @@ app.post('/api/save-ccd', uploadRateLimit, async (req, res) => {
 app.post('/api/media-upload', requireUserAuth, mediaRawParser, uploadRateLimit, async (req, res) => {
   try {
     const fileName = decodeURIComponent(String(req.get('x-file-name') || 'file'));
+    const projectId = String(req.get('x-project-id') || '').trim();
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const saved = saveBotMediaBuffer(body, fileName, req.authUserId);
-    return res.json({ ok: true, fileName: saved.fileName, filePath: saved.filePath });
+    if (projectId) {
+      const user = await findById(req.authUserId);
+      if (!user) return res.status(401).json({ error: 'Нет доступа' });
+      if (!isProUser(user)) {
+        return res.status(403).json({
+          error: 'Файлы проекта хранятся, пока активна подписка Premium. Оформите Pro.',
+          needsPremium: true,
+        });
+      }
+      await assertProjectOwned(req.authUserId, projectId);
+    }
+    const saved = saveBotMediaBuffer(body, fileName, req.authUserId, {
+      projectId: projectId || undefined,
+    });
+    return res.json({
+      ok: true,
+      fileName: saved.fileName,
+      filePath: saved.filePath,
+      persistent: saved.persistent,
+    });
   } catch (e) {
-    return res.status(400).json({ error: e?.publicMessage || 'Не удалось загрузить файл' });
+    const status = e?.statusCode || 400;
+    return res.status(status).json({ error: e?.publicMessage || 'Не удалось загрузить файл' });
   }
 });
 
@@ -2196,6 +2306,27 @@ app.post('/api/run', requireUserAuth, botRunRateLimit, async (req, res) => {
         error: 'Замените шаблонный токен на реальный токен от @BotFather',
       });
     }
+    const mode = String(req.body?.mode || 'sandbox').trim() === 'server' ? 'server' : 'sandbox';
+    const projectId = String(req.body?.projectId || '').trim();
+    let runTimeoutMs;
+    let runsUntil = null;
+    if (mode === 'server') {
+      const user = await findById(userId);
+      if (!user) return res.status(401).json({ error: 'Нет доступа' });
+      if (!isProUser(user)) {
+        return res.status(403).json({
+          error: 'Запуск на сервере доступен с активной подпиской Premium',
+          needsPremium: true,
+        });
+      }
+      if (!projectId) {
+        return res.status(400).json({ error: 'Укажите projectId для запуска проекта на сервере' });
+      }
+      await assertProjectOwned(userId, projectId);
+      runsUntil = Number(user.subscriptionExp);
+      runTimeoutMs = Math.max(60_000, runsUntil - Date.now());
+    }
+
     const runMediaFiles = mediaFilesFromCode(code);
     activeRunMediaFiles.set(userId, runMediaFiles);
     const meta = startRunner({
@@ -2203,6 +2334,9 @@ app.post('/api/run', requireUserAuth, botRunRateLimit, async (req, res) => {
       code,
       cicadaBin: CICADA_BIN,
       botsDir: BOTS_DIR,
+      timeoutMs: runTimeoutMs,
+      mode,
+      runsUntil,
       onEvent: (event, data) => {
         if (event === 'timeout') recordUserAction(data.userId, 'bot_timeout', {});
         if (event === 'output_limit') {
@@ -2245,8 +2379,17 @@ app.post('/api/run', requireUserAuth, botRunRateLimit, async (req, res) => {
         },
       });
     }
-    recordUserAction(userId, 'bot_start', { runtimeSec: Math.floor(meta.timeoutMs / 1000) });
-    res.json({ status: 'started', autoStopIn: Math.floor(meta.timeoutMs / 1000) });
+    recordUserAction(userId, 'bot_start', {
+      runtimeSec: Math.floor(meta.timeoutMs / 1000),
+      mode: meta.mode,
+      projectId: projectId || null,
+    });
+    res.json({
+      status: 'started',
+      mode: meta.mode,
+      autoStopIn: meta.mode === 'server' ? null : Math.floor(meta.timeoutMs / 1000),
+      runsUntil: meta.runsUntil ?? null,
+    });
   } catch (e) {
     return sendInternalApiError(res, 'POST /api/run', e, 'Не удалось запустить бота', 500);
   }
@@ -2905,6 +3048,7 @@ app.delete('/api/projects/:id', requireUserAuth, async (req, res) => {
       [id, userId]
     );
     if (!rowCount) return res.status(404).json({ error: 'Проект не найден' });
+    rmProjectMediaTree(userId, id);
     res.json({ success: true });
   } catch (e) {
     console.error('DELETE /api/projects/:id error:', e);

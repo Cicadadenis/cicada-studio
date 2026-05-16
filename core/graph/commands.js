@@ -186,7 +186,7 @@ export function validateGraphCommand(projectGraph, command = {}) {
 
   const maxOutputs = maxOutputsFor(source);
   if (maxOutputs <= 0) return { ok: false, reason: `${source.type} has no output port` };
-  if (source.type === 'condition') {
+  if (source.type === 'condition' || source.type === 'condition_not') {
     const sameBranch = outgoing.filter((edge) => String(edge.label || edge.condition || '').toLowerCase() === String(branchLabel).toLowerCase());
     if (sameBranch.length >= 1) return { ok: false, reason: `${branchLabel || 'branch'} already has an output` };
   } else if (outgoing.length >= maxOutputs) {

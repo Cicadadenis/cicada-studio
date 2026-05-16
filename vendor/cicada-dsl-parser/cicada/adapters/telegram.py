@@ -124,38 +124,65 @@ class TelegramAdapter:
         import os
         from io import BytesIO
 
+        # DEBUG: логируем тип файла и путь/ид
+        try:
+            file_desc = f"BytesIO(name={getattr(file,'name',None)})" if isinstance(file, BytesIO) else str(file)
+        except Exception:
+            file_desc = repr(file)
+        print(f"[DEBUG] _send_media method={method} field={field} chat_id={chat_id} file={file_desc} caption_len={len(caption)}")
+
         # Проверяем, является ли file объектом BytesIO
         if isinstance(file, BytesIO):
             file.seek(0)  # Перемещаемся в начало потока
             filename = getattr(file, "name", None) or f"{field}.bin"
-            resp = self._session.post(
-                self.base + method,
-                data={"chat_id": chat_id, "caption": caption},
-                files={field: (filename, file)},
-                timeout=60,
-            )
-            resp.raise_for_status()
-            return resp.json()
+            try:
+                resp = self._session.post(
+                    self.base + method,
+                    data={"chat_id": chat_id, "caption": caption},
+                    files={field: (filename, file)},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                print(f"[DEBUG] uploaded BytesIO as {filename}, status={resp.status_code}")
+                return resp.json()
+            except Exception as e:
+                print(f"[ERROR] send BytesIO failed: {e}")
+                raise
         
         # Остальная логика для строк (URL, file_id, локальные пути)
         if isinstance(file, str) and (self._is_url(file) or (not self._is_local(file))):
             # URL или file_id — передаём напрямую
-            return self.call(method, {
-                "chat_id": chat_id,
-                field: file,
-                "caption": caption,
-            })
+            try:
+                print(f"[DEBUG] sending as remote reference (url/file_id): {file}")
+                return self.call(method, {
+                    "chat_id": chat_id,
+                    field: file,
+                    "caption": caption,
+                })
+            except Exception as e:
+                print(f"[ERROR] send remote reference failed: {e}")
+                raise
         # Локальный файл
         if isinstance(file, str):
-            with open(file, "rb") as f:
-                resp = self._session.post(
-                    self.base + method,
-                    data={"chat_id": chat_id, "caption": caption},
-                    files={field: (os.path.basename(file), f)},
-                    timeout=60,
-                )
-            resp.raise_for_status()
-            return resp.json()
+            # Локальный файл
+            try:
+                print(f"[DEBUG] sending local file: {file}")
+                with open(file, "rb") as f:
+                    resp = self._session.post(
+                        self.base + method,
+                        data={"chat_id": chat_id, "caption": caption},
+                        files={field: (os.path.basename(file), f)},
+                        timeout=60,
+                    )
+                resp.raise_for_status()
+                print(f"[DEBUG] uploaded local file {file}, status={resp.status_code}")
+                return resp.json()
+            except FileNotFoundError:
+                print(f"[ERROR] local file not found: {file}")
+                raise
+            except Exception as e:
+                print(f"[ERROR] upload local file failed: {e}")
+                raise
         
         raise TypeError(f"Неподдерживаемый тип файла: {type(file)}")
 

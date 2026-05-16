@@ -207,9 +207,24 @@ function hardKill(state) {
   }, 1500).unref();
 }
 
-export function startRunner({ userId, code, cicadaBin, botsDir, onEvent }) {
+export function startRunner({
+  userId,
+  code,
+  cicadaBin,
+  botsDir,
+  onEvent,
+  timeoutMs: timeoutMsOverride,
+  mode = 'sandbox',
+  runsUntil = null,
+}) {
   validateInputs(userId, code);
   if (!cicadaBin) throw new Error('CICADA_BIN is not configured');
+
+  const maxServerMs = Number(process.env.DSL_MAX_SERVER_RUNTIME_MS || 365 * 24 * 60 * 60 * 1000);
+  const runTimeoutMs = Math.min(
+    Math.max(1000, Number.isFinite(Number(timeoutMsOverride)) ? Number(timeoutMsOverride) : MAX_RUNTIME_MS),
+    mode === 'server' ? maxServerMs : MAX_RUNTIME_MS,
+  );
 
   stopRunner(userId, { keepLog: false, reason: 'restart' });
 
@@ -246,13 +261,16 @@ export function startRunner({ userId, code, cicadaBin, botsDir, onEvent }) {
     startedAt: Date.now(),
     logs: '',
     timeout: null,
+    mode: mode === 'server' ? 'server' : 'sandbox',
+    runsUntil: runsUntil != null ? Number(runsUntil) : null,
+    timeoutMs: runTimeoutMs,
   };
   runners.set(userId, state);
 
   state.timeout = setTimeout(() => {
-    onEvent?.('timeout', { userId });
+    onEvent?.('timeout', { userId, mode: state.mode });
     hardKill(state);
-  }, MAX_RUNTIME_MS);
+  }, runTimeoutMs);
 
   proc.stdout?.on('data', (chunk) => appendLog(state, chunk));
   proc.stderr?.on('data', (chunk) => appendLog(state, chunk));
@@ -281,7 +299,12 @@ export function startRunner({ userId, code, cicadaBin, botsDir, onEvent }) {
     runners.delete(userId);
   });
 
-  return { startedAt: state.startedAt, timeoutMs: MAX_RUNTIME_MS };
+  return {
+    startedAt: state.startedAt,
+    timeoutMs: runTimeoutMs,
+    mode: state.mode,
+    runsUntil: state.runsUntil,
+  };
 }
 
 export function stopRunner(userId, { keepLog = false, reason = 'manual' } = {}) {
@@ -310,13 +333,26 @@ export function isRunnerActive(userId) {
 export function getRunnerStatus(userId) {
   const state = runners.get(userId);
   if (!state) return null;
-  return { startedAt: state.startedAt, file: state.file };
+  return {
+    startedAt: state.startedAt,
+    file: state.file,
+    mode: state.mode,
+    runsUntil: state.runsUntil,
+    timeoutMs: state.timeoutMs,
+  };
 }
 
 export function listRunners() {
   const out = [];
   runners.forEach((state, userId) => {
-    out.push({ userId, startedAt: state.startedAt, file: state.file });
+    out.push({
+      userId,
+      startedAt: state.startedAt,
+      file: state.file,
+      mode: state.mode || 'sandbox',
+      runsUntil: state.runsUntil ?? null,
+      timeoutMs: state.timeoutMs ?? MAX_RUNTIME_MS,
+    });
   });
   return out;
 }

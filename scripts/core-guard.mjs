@@ -9,16 +9,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const EXPECTED_VERSION = '0.0.1';
 const DEFAULT_CANONICAL_CORE = '/usr/local/lib/python3.12/dist-packages/cicada';
-const SYNCED_DIRS = [
-  'cicada',
-  'core',
-  'vendor/cicada-dsl-parser/cicada',
-];
-const CORE_RUNTIME_DIRS = [
-  'cicada',
-  'core',
-  'vendor/cicada-dsl-parser/cicada',
-];
+// No local sync directories: prefer the system-installed Cicada package
+const SYNCED_DIRS = [];
+const CORE_RUNTIME_DIRS = [];
 
 function sha256(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');

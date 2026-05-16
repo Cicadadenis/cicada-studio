@@ -858,27 +858,6 @@ class Executor:
             err.step_name = getattr(ctx, "current_step_name", None)
         return err
 
-    def _resolve_chat_id(self, ctx):
-        """Resolve chat_id from context or DEFAULT_CHAT_ID env var.
-
-        Returns int chat_id or raises CicadaRuntimeError if not available.
-        Adds a debug log indicating the source.
-        """
-        import os
-        cid = getattr(ctx, "chat_id", None)
-        source = "ctx" if cid else None
-        if not cid:
-            cid = os.environ.get("DEFAULT_CHAT_ID")
-            source = "env:DEFAULT_CHAT_ID" if cid else None
-        if not cid:
-            raise CicadaRuntimeError("chat_id is not set and DEFAULT_CHAT_ID is not configured")
-        try:
-            cid_int = int(cid)
-        except Exception:
-            raise CicadaRuntimeError(f"Invalid chat_id value: {cid}")
-        self._log("DEBUG", f"Resolved chat_id from {source}: {cid_int}", ctx)
-        return cid_int
-
     def _eval(self, node, ctx):
         strict = not self.debug
         try:
@@ -1374,24 +1353,51 @@ class Executor:
     def _emit_effect(self, effect: CoreEffect):
         self.effects.append(effect)
 
-    def _send_message(self, chat_id: int, text: str, **kwargs):
-        self._emit_effect(MessageEffect(chat_id, text))
-        return self.tg.send_message(chat_id, text, **kwargs)
+    def _resolve_chat_id(self, chat_id: int | None) -> int:
+        """Resolve chat_id or fallback to DEFAULT_CHAT_ID env var. Raises CicadaRuntimeError if missing/invalid."""
+        resolved = chat_id or _os.environ.get("DEFAULT_CHAT_ID")
+        if resolved in (None, ""):
+            raise CicadaRuntimeError("chat_id не задан для отправки сообщения")
+        try:
+            return int(resolved)
+        except Exception:
+            raise CicadaRuntimeError(f"chat_id не является числом: {resolved!r}")
 
-    def _send_buttons_matrix(self, chat_id: int, matrix: list, text: str = None):
-        self._emit_effect(ButtonsEffect(chat_id, text if text is not None else " ", matrix))
-        return self.tg.send_buttons_matrix(chat_id, matrix, text=text)
+    def _send_message(self, chat_id: int | None, text: str, **kwargs):
+        resolved_chat = self._resolve_chat_id(chat_id)
+        self._emit_effect(MessageEffect(resolved_chat, text))
+        return self.tg.send_message(resolved_chat, text, **kwargs)
 
-    def _send_inline_keyboard(self, chat_id: int, keyboard: list, text: str = "\u200b"):
-        self._emit_effect(InlineKeyboardEffect(chat_id, text, keyboard))
-        return self.tg.send_inline_keyboard(chat_id, keyboard, text=text)
+    def _send_buttons_matrix(self, chat_id: int | None, matrix: list, text: str = None):
+        resolved_chat = self._resolve_chat_id(chat_id)
+        self._emit_effect(ButtonsEffect(resolved_chat, text if text is not None else " ", matrix))
+        return self.tg.send_buttons_matrix(resolved_chat, matrix, text=text)
 
-    def _send_media(self, chat_id: int, media_type: str, file: str, caption: str = ""):
-        self._emit_effect(MediaEffect(chat_id, media_type, file, caption))
+    def _send_inline_keyboard(self, chat_id: int | None, keyboard: list, text: str = "\u200b"):
+        resolved_chat = self._resolve_chat_id(chat_id)
+        self._emit_effect(InlineKeyboardEffect(resolved_chat, text, keyboard))
+        return self.tg.send_inline_keyboard(resolved_chat, keyboard, text=text)
+
+    def _send_media(self, chat_id: int | None, media_type: str, file: str, caption: str = ""):
+        """
+        Отправка медиа (photo/document/video/voice/sticker).
+        Если chat_id не передан — пытаемся взять из окружения `DEFAULT_CHAT_ID`.
+        Если chat_id всё ещё не задан — выдаём подробную ошибку.
+        """
+        # Разрешаем fallback на DEFAULT_CHAT_ID из окружения
+        resolved_chat = chat_id or _os.environ.get("DEFAULT_CHAT_ID")
+        if resolved_chat in (None, ""):
+            raise CicadaRuntimeError("chat_id не задан для отправки медиа")
+        try:
+            resolved_chat = int(resolved_chat)
+        except Exception:
+            raise CicadaRuntimeError(f"chat_id не является числом: {resolved_chat!r}")
+
+        self._emit_effect(MediaEffect(resolved_chat, media_type, file, caption))
         method = getattr(self.tg, f"send_{media_type}")
         if media_type == "sticker":
-            return method(chat_id, file)
-        return method(chat_id, file, caption)
+            return method(resolved_chat, file)
+        return method(resolved_chat, file, caption)
 
     def _send_platform(self, kind: str, chat_id: int | None = None, **payload):
         self._emit_effect(PlatformEffect(kind, chat_id, **payload))
@@ -1416,11 +1422,9 @@ class Executor:
         if buttons:
             if not text.strip():
                 text = "\u200b"
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_buttons_matrix(chat_id, buttons, text=text)
+            self._send_buttons_matrix(ctx.chat_id, buttons, text=text)
         elif text.strip():
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_message(chat_id, text)
+            self._send_message(ctx.chat_id, text)
 
         ctx._pending_message = None
 
@@ -1481,11 +1485,9 @@ class Executor:
         if photo is not None and photo != "":
             if not isinstance(photo, _BytesIO):
                 photo = str(photo)
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_media(chat_id, "photo", photo)
+            self._send_media(ctx.chat_id, "photo", photo)
         else:
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_message(chat_id, "⚠️ Фото не задано")
+            self._send_message(ctx.chat_id, "⚠️ Фото не задано")
 
     # ── Циклы ─────────────────────────────────────────────────────────
 
@@ -1574,12 +1576,6 @@ class Executor:
         if not isinstance(items, list):
             raise CicadaTypeError("inline-кнопки из списка: ожидается список items.")
 
-        cols = max(1, int(stmt.columns or 1))
-        flat_buttons = []
-        for item in items:
-            if isinstance(item, dict):
-                text = str(item.get(stmt.text_field, ""))
-                item_id = item.get(stmt.id_field, "")
         self._send_inline_items(
             items,
             ctx,
@@ -1636,11 +1632,6 @@ class Executor:
                 item_id = item
             if not text:
                 continue
-            flat_buttons.append(InlineButton(text=text, callback=f"{stmt.callback_prefix}{item_id}"))
-
-        if stmt.append_back:
-            flat_buttons.append(InlineButton(text="🔙 Назад", callback="back"))
-
             flat_buttons.append(InlineButton(text=text, callback=f"{callback_prefix}{item_id}"))
 
         if back_text and back_callback:
@@ -1685,26 +1676,21 @@ class Executor:
             # Потребляем накопленный текст, чтобы финальный _flush не дублировал его
             ctx._pending_message = None
 
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_inline_keyboard(chat_id, keyboard, text=pending_text or "\u200b")
+        self._send_inline_keyboard(ctx.chat_id, keyboard, text=pending_text or "\u200b")
 
     def _exec_photo(self, stmt: Photo, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "photo", stmt.url)
+        self._send_media(ctx.chat_id, "photo", stmt.url)
 
     def _exec_sticker(self, stmt: Sticker, ctx):
         file_id = eval_expr(stmt.file_id, ctx) if not isinstance(stmt.file_id, str) else stmt.file_id
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "sticker", str(file_id))
+        self._send_media(ctx.chat_id, "sticker", str(file_id))
 
     def _exec_forward_photo(self, stmt: ForwardPhoto, ctx):
         file_id = ctx.get("файл_id", "")
         if file_id:
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_media(chat_id, "photo", file_id, caption=stmt.caption)
+            self._send_media(ctx.chat_id, "photo", file_id, caption=stmt.caption)
         else:
-            chat_id = self._resolve_chat_id(ctx)
-            self._send_message(chat_id, "⚠️ Нет фото для пересылки")
+            self._send_message(ctx.chat_id, "⚠️ Нет фото для пересылки")
 
     def _exec_save_file(self, stmt: SaveFile, ctx):
         ctx.set(stmt.variable, ctx.get("файл_id", ""))
@@ -1723,66 +1709,60 @@ class Executor:
 
     def _send_formatted_text(self, ctx, parts: list, kind: str, method_name: str):
         text = self._render_parts(parts, ctx)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform(kind, chat_id, text=text)
-        getattr(self.tg, method_name)(chat_id, text)
+        # Use resolved chat id (fallback to DEFAULT_CHAT_ID)
+        resolved_chat = self._resolve_chat_id(getattr(ctx, "chat_id", None))
+        self._send_platform(kind, resolved_chat, text=text)
+        getattr(self.tg, method_name)(resolved_chat, text)
 
     def _exec_send_document(self, stmt: SendDocument, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "document", file, stmt.caption)
+        self._send_media(ctx.chat_id, "document", file, stmt.caption)
 
     def _exec_send_audio(self, stmt: SendAudio, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "audio", file, stmt.caption)
+        self._send_media(ctx.chat_id, "audio", file, stmt.caption)
 
     def _exec_send_video(self, stmt: SendVideo, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "video", file, stmt.caption)
+        self._send_media(ctx.chat_id, "video", file, stmt.caption)
 
     def _exec_send_voice(self, stmt: SendVoice, ctx):
         from io import BytesIO as _BytesIO
         file = eval_expr(stmt.file, ctx) if not isinstance(stmt.file, str) else stmt.file
         if not isinstance(file, _BytesIO):
             file = str(file)
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_media(chat_id, "voice", file, stmt.caption)
+        self._send_media(ctx.chat_id, "voice", file, stmt.caption)
 
     def _exec_send_location(self, stmt: SendLocation, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("location", chat_id, latitude=stmt.latitude, longitude=stmt.longitude)
-        self.tg.send_location(chat_id, stmt.latitude, stmt.longitude)
+        resolved_chat = self._resolve_chat_id(getattr(ctx, "chat_id", None))
+        self._send_platform("location", resolved_chat, latitude=stmt.latitude, longitude=stmt.longitude)
+        self.tg.send_location(resolved_chat, stmt.latitude, stmt.longitude)
 
     def _exec_send_contact(self, stmt: SendContact, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("contact", chat_id, phone=stmt.phone, name=stmt.name)
-        self.tg.send_contact(chat_id, stmt.phone, stmt.name)
+        resolved_chat = self._resolve_chat_id(getattr(ctx, "chat_id", None))
+        self._send_platform("contact", resolved_chat, phone=stmt.phone, name=stmt.name)
+        self.tg.send_contact(resolved_chat, stmt.phone, stmt.name)
 
     def _exec_send_poll(self, stmt: SendPoll, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("poll", chat_id, question=stmt.question, options=stmt.options)
-        self.tg.send_poll(chat_id, stmt.question, stmt.options)
+        self._send_platform("poll", ctx.chat_id, question=stmt.question, options=stmt.options)
+        self.tg.send_poll(ctx.chat_id, stmt.question, stmt.options)
 
     def _exec_send_invoice(self, stmt: SendInvoice, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("invoice", chat_id, title=stmt.title, description=stmt.description, amount=stmt.amount)
-        self.tg.send_invoice(chat_id, stmt.title, stmt.description, stmt.amount)
+        self._send_platform("invoice", ctx.chat_id, title=stmt.title, description=stmt.description, amount=stmt.amount)
+        self.tg.send_invoice(ctx.chat_id, stmt.title, stmt.description, stmt.amount)
 
     def _exec_send_game(self, stmt: SendGame, ctx):
-        chat_id = self._resolve_chat_id(ctx)
-        self._send_platform("game", chat_id, short_name=stmt.short_name)
-        self.tg.send_game(chat_id, stmt.short_name)
+        self._send_platform("game", ctx.chat_id, short_name=stmt.short_name)
+        self.tg.send_game(ctx.chat_id, stmt.short_name)
 
     def _exec_download_file(self, stmt: DownloadFile, ctx):
         file_id = ctx.get("файл_id", "")

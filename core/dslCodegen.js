@@ -26,6 +26,12 @@ import {
   irBuildOptionsFromValidateMode,
 } from './ir/compileGate.js';
 import { irNodeDslEmitName } from './ir/buildProjectIrV2.js';
+import {
+  isConditionLikeType,
+  negateConditionForDsl,
+} from './dslCondition.js';
+
+export { parseIfConditionFromDsl, negateConditionForDsl, isConditionLikeType } from './dslCondition.js';
 
 export { normalizeFlowNode };
 export { validateProjectIr, validateProjectIrStrict };
@@ -620,6 +626,10 @@ export function emitBlockText(block) {
       const cond = String(p.cond || '').replace(/:?\s*$/, '');
       return `если ${cond}:`;
     }
+    case 'condition_not': {
+      const cond = String(p.cond || '').replace(/:?\s*$/, '');
+      return `если ${negateConditionForDsl(cond)}:`;
+    }
     case 'message':
       return emitMessageWithLocalButtons(block, p);
     case 'use':
@@ -790,7 +800,7 @@ function topLevelStatementsForStepBody(body) {
 
   while (i < body.length) {
     const b = body[i];
-    if (b.type === 'condition') {
+    if (isConditionLikeType(b.type)) {
       const stmt = [b];
       i += 1;
       while (i < body.length && body[i].type !== 'else' && !afterScope(body[i])) {
@@ -824,7 +834,7 @@ function topLevelStatementsForStepBody(body) {
       while (
         i < body.length &&
         !afterScope(body[i]) &&
-        body[i].type !== 'condition' &&
+        !isConditionLikeType(body[i].type) &&
         body[i].type !== 'else' &&
         body[i].type !== 'loop'
       ) {
@@ -902,6 +912,38 @@ export function expandScenarioStackBlocksForAskFsm(blocks) {
   return out;
 }
 
+const TEXT_ATTACHMENT_BLOCK_TYPES = new Set(['buttons', 'inline', 'inline_db']);
+
+function isMessageHostBlock(block) {
+  const t = block?.type;
+  return t === 'message' || t === 'menu';
+}
+
+/** Следующие подряд блоки «Кнопки» / «Inline» / «Inline из БД» — только к ответу. */
+function collectFollowingTextAttachments(blocks, startIndex) {
+  const attachments = [];
+  let j = startIndex;
+  while (j < blocks.length && TEXT_ATTACHMENT_BLOCK_TYPES.has(blocks[j]?.type)) {
+    attachments.push(blocks[j]);
+    j += 1;
+  }
+  return { attachments, nextIndex: j };
+}
+
+function emitHostWithLegacyAttachments(block, attachmentBlocks, declaredBlocks) {
+  const lines = [];
+  const hostText = emitBlockText(block);
+  if (hostText) lines.push(hostText);
+  for (const att of attachmentBlocks) {
+    const attText = emitBlockText(att);
+    if (attText) lines.push(attText);
+  }
+  for (const attachmentText of emitUiAttachmentTexts(block, declaredBlocks)) {
+    if (attachmentText) lines.push(attachmentText);
+  }
+  return lines.join('\n');
+}
+
 /**
  * Линейные стеки с «если … иначе» — добавляем отступы тел как в parser.py.
  */
@@ -922,7 +964,7 @@ function stackToDSLStructured(blocks) {
   const isBoundary = (block) => {
     if (!block) return true;
     if (block.props?._afterScope) return true;
-    if (block.type === 'condition' || block.type === 'else' || block.type === 'loop') return true;
+    if (isConditionLikeType(block.type) || block.type === 'else' || block.type === 'loop') return true;
     if (rootType === 'scenario' && block.type === 'step') return true;
     return false;
   };
@@ -933,13 +975,20 @@ function stackToDSLStructured(blocks) {
     }
   };
 
-  const pushBlock = (block, indent) => {
-    const blockText = emitBlockText(block);
-    pushText(blockText, indent);
-    const attachmentIndent = blockText.trim().endsWith(':') ? indent + 1 : indent;
-    for (const attachmentText of emitUiAttachmentTexts(block, declaredBlocks)) {
-      pushText(attachmentText, attachmentIndent);
+  const pushBlock = (block, indent, legacyAttachments = []) => {
+    let blockText;
+    if (legacyAttachments.length && isMessageHostBlock(block)) {
+      blockText = emitHostWithLegacyAttachments(block, legacyAttachments, declaredBlocks);
+    } else {
+      blockText = emitBlockText(block);
+      const attachmentIndent = blockText.trim().endsWith(':') ? indent + 1 : indent;
+      pushText(blockText, indent);
+      for (const attachmentText of emitUiAttachmentTexts(block, declaredBlocks)) {
+        pushText(attachmentText, attachmentIndent);
+      }
+      return;
     }
+    pushText(blockText, indent);
   };
 
   while (i < blocks.length) {
@@ -948,7 +997,7 @@ function stackToDSLStructured(blocks) {
 
     if (block.type === 'step') insideScenarioStep = true;
 
-    if (block.type === 'condition') {
+    if (isConditionLikeType(block.type)) {
       pushBlock(block, baseIndent);
       i += 1;
       while (i < blocks.length && blocks[i].type !== 'else' && !isBoundary(blocks[i])) {
@@ -989,8 +1038,19 @@ function stackToDSLStructured(blocks) {
       continue;
     }
 
-    pushBlock(block, baseIndent);
-    i += 1;
+    if (TEXT_ATTACHMENT_BLOCK_TYPES.has(block.type)) {
+      i += 1;
+      continue;
+    }
+
+    let legacyAttachments = [];
+    if (isMessageHostBlock(block)) {
+      const collected = collectFollowingTextAttachments(blocks, i + 1);
+      legacyAttachments = collected.attachments;
+    }
+
+    pushBlock(block, baseIndent, legacyAttachments);
+    i += 1 + legacyAttachments.length;
   }
   return out.join('\n');
 }
@@ -1191,6 +1251,7 @@ export function validateFlow(flow) {
         if (outgoing === 0) warnings.push(`Команда /${p.cmd || '?'} не имеет дочерних блоков`);
         break;
       case 'condition':
+      case 'condition_not':
         if (!p.cond?.trim()) errors.push(`Блок «Условие» [${n.id}]: пустое условие`);
         break;
       case 'else':

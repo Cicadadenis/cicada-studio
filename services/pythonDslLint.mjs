@@ -5,22 +5,6 @@ import { spawnSync } from 'child_process';
 
 const MAX_CODE_BYTES = Number(process.env.DSL_MAX_CODE_BYTES || 100_000);
 
-/**
- * Резолвит путь к lint_cicada.py.
- * Сначала пробует vendor/cicada-dsl-parser/, затем корень проекта.
- */
-function resolveLintScript(rootDir = process.cwd()) {
-  const vendorScript = path.resolve(rootDir, 'vendor', 'cicada-dsl-parser', 'lint_cicada.py');
-  if (fs.existsSync(vendorScript)) return vendorScript;
-  // Запасной путь — lint_cicada.py в корне проекта (ручная установка)
-  const rootScript = path.resolve(rootDir, 'lint_cicada.py');
-  if (fs.existsSync(rootScript)) return rootScript;
-  return vendorScript; // вернём vendor-путь, чтобы ошибка была информативной
-}
-
-/**
- * Выбирает интерпретатор Python (Windows-friendly).
- */
 function pythonCmd() {
   const fromEnv = process.env.PYTHON || process.env.PYTHON3;
   if (fromEnv) return fromEnv;
@@ -89,22 +73,10 @@ function unsupportedBlockCommentDiagnostics(code) {
  */
 export function lintCicadaWithPython(opts) {
   const code = String(opts.code ?? '');
-  const cwd  = opts.cwd ?? process.cwd();
-  const script = resolveLintScript(cwd);
   const timeoutMs = Math.max(
     1_000,
     Math.min(15_000, Number.isFinite(Number(opts.timeoutMs)) ? Number(opts.timeoutMs) : 15_000),
   );
-
-  // ── скрипт не найден ────────────────────────────────────────────────────
-  if (!fs.existsSync(script)) {
-    return {
-      ok: false,
-      available: false,
-      diagnostics: [],
-      error: `Lint-скрипт не найден: ${script}. Убедитесь, что vendor/cicada-dsl-parser/lint_cicada.py существует.`,
-    };
-  }
 
   const unsupportedCommentDiags = unsupportedBlockCommentDiagnostics(code);
   if (unsupportedCommentDiags.length) {
@@ -134,21 +106,70 @@ export function lintCicadaWithPython(opts) {
     fs.writeFileSync(tmp, finalCode, 'utf8');
 
     const py = pythonCmd();
-    const proc = spawnSync(py, [script, tmp], {
-      cwd,
-      encoding: 'utf8',
-      maxBuffer: 2 * 1024 * 1024,
-      windowsHide: true,
-      shell: false,
-      timeout: timeoutMs,
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        PYTHONUTF8: '1',
-        PYTHONIOENCODING: 'utf-8',
-        PYTHONUNBUFFERED: '1',
-      },
-    });
+      const bootstrap = `
+import io, json, sys
+from pathlib import Path
+from cicada.parser import Parser
+
+path = Path(sys.argv[1]).resolve()
+source = path.read_text(encoding='utf-8')
+try:
+    Parser(source, base_path=str(path.parent)).parse()
+    print(json.dumps({"ok": True, "available": True, "diagnostics": []}, ensure_ascii=False))
+    sys.exit(0)
+except SyntaxError as e:
+    lineno = int(getattr(e, 'lineno', None) or 1)
+    msg = getattr(e, 'msg', None) or (e.args[0] if e.args else str(e)) or str(e)
+    offset = getattr(e, 'offset', None)
+    text = getattr(e, 'text', None)
+    column = offset if isinstance(offset, int) else None
+    src_line = text.rstrip('\\n') if isinstance(text, str) else None
+    diag = {
+        "type": "SyntaxError",
+        "code": "DSL-PY",
+        "severity": "error",
+        "line": lineno,
+        "column": column,
+        "offset": offset if isinstance(offset, int) else None,
+        "message": str(msg),
+        "sourceLine": src_line,
+        "help": "Проверь синтаксис строки.",
+        "suggestions": [],
+    }
+    print(json.dumps({"ok": False, "available": True, "diagnostics": [diag]}, ensure_ascii=False))
+    sys.exit(1)
+except Exception as e:
+    diag = {
+        "type": "ParserError",
+        "code": "DSL-PY",
+        "severity": "error",
+        "line": 1,
+        "column": None,
+        "offset": None,
+        "message": str(e),
+        "sourceLine": None,
+        "help": str(e),
+        "suggestions": [],
+    }
+    print(json.dumps({"ok": False, "available": True, "diagnostics": [diag]}, ensure_ascii=False))
+    sys.exit(1)
+`.trim();
+
+      const proc = spawnSync(py, ['-c', bootstrap, tmp], {
+        cwd: os.tmpdir(),
+        encoding: 'utf8',
+        maxBuffer: 2 * 1024 * 1024,
+        windowsHide: true,
+        shell: false,
+        timeout: timeoutMs,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PYTHONUTF8: '1',
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUNBUFFERED: '1',
+        },
+      });
 
     const errText = (proc.stderr || '').trim();
 
@@ -202,7 +223,7 @@ export function requireParsedDSL(dslCode, opts = {}) {
   if (!result.available) {
     const e = new Error(
       `Парсер Cicada недоступен — невозможно проверить DSL от AI. ` +
-      `${result.error || 'Проверьте наличие Python и файла vendor/cicada-dsl-parser/lint_cicada.py'}`
+        `${result.error || 'Проверьте наличие Python и установленного пакета Cicada'}`
     );
     e.parserUnavailable = true;
     throw e;
@@ -227,21 +248,23 @@ export function requireParsedDSL(dslCode, opts = {}) {
 }
 
 /**
- * Получает DSL-aware hints из vendor/cicada-dsl-parser/cicada/hints.py.
+ * Получает DSL-aware hints из установленного пакета Cicada.
  * Возвращает пустой список, если модуль/интерпретатор недоступен.
  */
 export function getDslHintsWithPython(opts) {
   const code = String(opts.code ?? '');
-  const cwd = opts.cwd ?? process.cwd();
   const py = pythonCmd();
   const bootstrap = `
 import json, sys
 from pathlib import Path
-root = Path(sys.argv[1]).resolve()
-sys.path.insert(0, str(root / "vendor" / "cicada-dsl-parser"))
-from cicada.hints import dsl_aware_hints
-src = Path(sys.argv[2]).read_text(encoding="utf-8")
-print(json.dumps(dsl_aware_hints(src), ensure_ascii=False))
+try:
+    from cicada.hints import dsl_aware_hints
+except Exception as e:
+    print(json.dumps({"ok": False, "hints": [], "error": str(e)}, ensure_ascii=False))
+    sys.exit(0)
+
+src = Path(sys.argv[1]).read_text(encoding='utf-8')
+print(json.dumps({"ok": True, "hints": dsl_aware_hints(src)}, ensure_ascii=False))
 `.trim();
 
   const tmp = path.join(os.tmpdir(), `cicada-hints-${process.pid}-${Date.now()}.ccd`);
@@ -249,8 +272,8 @@ print(json.dumps(dsl_aware_hints(src), ensure_ascii=False))
     const CICADA_HEADER = '# Cicada3301';
     const finalCode = code.trimStart().startsWith(CICADA_HEADER) ? code : CICADA_HEADER + '\n' + code;
     fs.writeFileSync(tmp, finalCode, 'utf8');
-    const proc = spawnSync(py, ['-c', bootstrap, cwd, tmp], {
-      cwd,
+    const proc = spawnSync(py, ['-c', bootstrap, tmp], {
+      cwd: os.tmpdir(),
       encoding: 'utf8',
       maxBuffer: 2 * 1024 * 1024,
       windowsHide: true,

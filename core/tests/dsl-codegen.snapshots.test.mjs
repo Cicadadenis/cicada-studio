@@ -83,3 +83,42 @@ test('render-action UI attachments emit relative DSL without executable editor c
   assert.match(dsl, /inline-кнопки:\n        \["Помощь" → "help_cb"\]/);
   assert.match(dsl, /при нажатии "Каталог":\n    перейти catalog/);
 });
+
+test('legacy buttons/inline_db blocks attach to preceding message only', () => {
+  const dsl = generateDSLFromStacks([
+    {
+      id: 's_start',
+      blocks: [
+        { id: 'h', type: 'start', props: {} },
+        { id: 'u', type: 'use', props: { blockname: 'главное_меню' } },
+        { id: 'orphan', type: 'buttons', props: { rows: '🏠 Главная' } },
+      ],
+    },
+    {
+      id: 's_catalog',
+      blocks: [
+        { id: 'cb', type: 'callback', props: { label: '📦 Каталог' } },
+        { id: 'm', type: 'message', props: { text: 'Выберите категорию:' } },
+        {
+          id: 'idb',
+          type: 'inline_db',
+          props: {
+            key: 'категории',
+            callbackPrefix: 'category:',
+            backText: '⬅️ Назад',
+            backCallback: 'назад',
+            columns: '2',
+          },
+        },
+        { id: 'st', type: 'stop', props: {} },
+      ],
+    },
+  ]);
+
+  assert.match(dsl, /при старте:\n    использовать главное_меню\n/);
+  assert.doesNotMatch(dsl, /использовать главное_меню\n\s+кнопки/);
+  assert.match(
+    dsl,
+    /при нажатии "📦 Каталог":\n    ответ "Выберите категорию:"\n    inline из бд "категории"/,
+  );
+});

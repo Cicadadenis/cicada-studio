@@ -247,6 +247,7 @@ function preview(data) {
     case 'buttons':   return (p.rows||'').split('\n')[0]?.slice(0,26) || '';
     case 'command':   return '/' + (p.cmd||'');
     case 'condition': return p.cond?.slice(0,26) || '';
+    case 'condition_not': return p.cond ? `не ${p.cond}`.slice(0, 26) : '';
     case 'ask':       return p.question?.slice(0,22) || '';
     case 'remember':  return `${p.varname||''} = ${p.value||''}`;
     case 'get':       return `"${p.key||''}" → ${p.varname||''}`;

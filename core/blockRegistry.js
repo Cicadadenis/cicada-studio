@@ -233,6 +233,12 @@ export const logicBlocks = Object.freeze([
       { cond: 'текст == "да"' },
     ),
   }),
+  block('condition_not', 'logic', 'Negated conditional branch (если … не == …).', {
+    constraints: withDefaults(
+      withFlow(palette('Если не', '◈', '#f472b6', 'Логика', false, true), { maxOutputs: 2, outputLabels: ['true', 'false'] }),
+      { cond: 'текст == "да"' },
+    ),
+  }),
   block('else', 'logic', 'Fallback branch for a condition.', {
     constraints: palette('Иначе', '⎇', '#f97316', 'Логика', false, true),
   }),
