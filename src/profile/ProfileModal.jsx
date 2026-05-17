@@ -368,9 +368,28 @@ function SaveToCloudButton({ onSaveToCloud }) {
   );
 }
 
-export default function ProfileModal({ user, projects, initialTab = 'profile', onClose, onLogout, onUpdateUser, onUploadAvatar, onLoadProject, onDeleteProject, onSaveToCloud, showToast, isMobile, onOpenInstructions }) {
+export default function ProfileModal({
+  user,
+  projects,
+  initialTab = 'profile',
+  onClose,
+  onLogout,
+  onUpdateUser,
+  onUploadAvatar,
+  onLoadProject,
+  onDeleteProject,
+  onSaveToCloud,
+  showToast,
+  isMobile,
+  onOpenInstructions,
+  botControl = null,
+  onStartBotOnServer,
+  onStopBot,
+  onOpenPremium,
+}) {
   const builderUiContext = React.useContext(BuilderUiContext);
-  const builderUiForToast = builderUiContext?.t;
+  const builderUi = builderUiContext?.t;
+  const builderUiForToast = builderUi;
   const uiLang = (builderUiContext?.lang || user.uiLanguage || 'ru').toLowerCase();
   const I18N = {
     ru: {
@@ -410,6 +429,11 @@ export default function ProfileModal({ user, projects, initialTab = 'profile', o
       uploadPhoto: '📷 Загрузить фото',
       saving: '⏳ Сохраняем…',
       remove: 'Удалить',
+      projectStartServer: '☁ На сервере',
+      projectStopServer: '■ Остановить',
+      projectServerActive: '● На сервере',
+      projectServerOther: 'Сервер занят другим проектом',
+      projectNeedsPremium: 'Premium для запуска на сервере',
       maxFile: '@ Максимум 15MB',
       language: 'Язык',
       interfaceLanguage: 'Язык интерфейса',
@@ -469,6 +493,11 @@ export default function ProfileModal({ user, projects, initialTab = 'profile', o
       uploadPhoto: '📷 Upload photo',
       saving: '⏳ Saving…',
       remove: 'Remove',
+      projectStartServer: '☁ On server',
+      projectStopServer: '■ Stop',
+      projectServerActive: '● On server',
+      projectServerOther: 'Server is running another project',
+      projectNeedsPremium: 'Premium required for server run',
       maxFile: '@ Maximum 15MB',
       language: 'Language',
       interfaceLanguage: 'Interface language',
@@ -528,6 +557,11 @@ export default function ProfileModal({ user, projects, initialTab = 'profile', o
       uploadPhoto: '📷 Завантажити фото',
       saving: '⏳ Зберігаємо…',
       remove: 'Видалити',
+      projectStartServer: '☁ На сервері',
+      projectStopServer: '■ Зупинити',
+      projectServerActive: '● На сервері',
+      projectServerOther: 'Сервер зайнятий іншим проєктом',
+      projectNeedsPremium: 'Premium для запуску на сервері',
       maxFile: '@ Максимум 15MB',
       language: 'Мова',
       interfaceLanguage: 'Мова інтерфейсу',
@@ -1427,16 +1461,59 @@ export default function ProfileModal({ user, projects, initialTab = 'profile', o
                     <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.2)', marginTop: 8, lineHeight: 1.6 }}>{t.saveProjectHint}</div>
                   </div>
                 ) : (
-                  projects.map((project, i) => (
+                  projects.map((project, i) => {
+                    const serverActive = Boolean(
+                      botControl?.isRunning
+                      && botControl?.mode === 'server'
+                      && botControl?.serverProjectId === project.id,
+                    );
+                    const serverBusyOther = Boolean(
+                      botControl?.isRunning
+                      && botControl?.mode === 'server'
+                      && botControl?.serverProjectId
+                      && botControl.serverProjectId !== project.id,
+                    );
+                    const sandboxActive = Boolean(botControl?.isRunning && botControl?.mode === 'sandbox');
+                    const canStartServer = Boolean(
+                      onStartBotOnServer
+                      && botControl?.hasPremium
+                      && !serverActive
+                      && !serverBusyOther
+                      && !sandboxActive
+                      && !botControl?.isStarting,
+                    );
+                    return (
                     <div
                       key={project.id}
-                      style={{ padding: '12px 14px', background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 14, display: 'flex', alignItems: 'center', gap: 14, transition: 'all 0.2s ease', animation: `projectFade 0.3s ease ${i * 0.06}s both` }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.borderColor = 'rgba(255,215,0,0.2)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)'; }}
+                      style={{
+                        padding: '12px 14px',
+                        background: serverActive ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.025)',
+                        border: serverActive ? '1px solid rgba(56,189,248,0.35)' : '1px solid rgba(255,255,255,0.09)',
+                        borderRadius: 14,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 14,
+                        transition: 'all 0.2s ease',
+                        animation: `projectFade 0.3s ease ${i * 0.06}s both`,
+                        flexWrap: isMobile ? 'wrap' : 'nowrap',
+                      }}
+                      onMouseEnter={e => {
+                        if (serverActive) return;
+                        e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                        e.currentTarget.style.borderColor = 'rgba(255,215,0,0.2)';
+                      }}
+                      onMouseLeave={e => {
+                        if (serverActive) return;
+                        e.currentTarget.style.background = 'rgba(255,255,255,0.025)';
+                        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)';
+                      }}
                     >
                       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'linear-gradient(135deg,rgba(255,215,0,0.15),rgba(255,140,0,0.15))', border: '1px solid rgba(255,215,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>📋</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', fontFamily: 'Syne, system-ui', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', fontFamily: 'Syne, system-ui', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
+                          {serverActive && <span style={{ fontSize: 10, fontWeight: 700, color: '#38bdf8', flexShrink: 0 }}>{t.projectServerActive}</span>}
+                        </div>
                         <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', marginTop: 3, fontFamily: 'var(--mono)' }}>Изменён {formatDate(project.updatedAt)}</div>
                       </div>
                       {confirmDelete === project.id ? (
@@ -1445,13 +1522,57 @@ export default function ProfileModal({ user, projects, initialTab = 'profile', o
                           <button onClick={() => setConfirmDelete(null)} style={{ padding: '7px 12px', fontSize: 11, background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, cursor: 'pointer' }}>{t.cancel}</button>
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                          <button onClick={() => onLoadProject(project.id)} style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, fontFamily: 'Syne, system-ui', background: 'linear-gradient(135deg,#3ecf8e,#0ea5e9)', color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', boxShadow: '0 4px 12px rgba(62,207,142,0.3)', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; }}>↓ Открыть</button>
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <button onClick={() => onLoadProject(project.id)} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 700, fontFamily: 'Syne, system-ui', background: 'linear-gradient(135deg,#3ecf8e,#0ea5e9)', color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', boxShadow: '0 4px 12px rgba(62,207,142,0.3)', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; }}>↓ Открыть</button>
+                          {serverActive ? (
+                            <button
+                              type="button"
+                              onClick={() => onStopBot?.()}
+                              disabled={botControl?.isStopping}
+                              style={{ padding: '9px 12px', fontSize: 11, fontWeight: 700, fontFamily: 'Syne, system-ui', background: 'linear-gradient(135deg,#fb7185,#ef4444)', color: '#fff', border: 'none', borderRadius: 10, cursor: botControl?.isStopping ? 'wait' : 'pointer', opacity: botControl?.isStopping ? 0.7 : 1 }}
+                            >{t.projectStopServer}</button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!botControl?.hasPremium) {
+                                  onOpenPremium?.();
+                                  return;
+                                }
+                                onStartBotOnServer?.(project.id);
+                              }}
+                              disabled={!canStartServer && botControl?.hasPremium}
+                              title={
+                                !botControl?.hasPremium
+                                  ? t.projectNeedsPremium
+                                  : serverBusyOther
+                                    ? t.projectServerOther
+                                    : sandboxActive
+                                      ? (builderUi?.sandboxBlocksServer || '')
+                                      : ''
+                              }
+                              style={{
+                                padding: '9px 12px',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                fontFamily: 'Syne, system-ui',
+                                background: canStartServer
+                                  ? 'linear-gradient(135deg,#38bdf8,#0ea5e9)'
+                                  : 'rgba(56,189,248,0.12)',
+                                color: canStartServer ? '#fff' : 'rgba(148,163,184,0.75)',
+                                border: '1px solid rgba(56,189,248,0.35)',
+                                borderRadius: 10,
+                                cursor: canStartServer ? 'pointer' : 'not-allowed',
+                                opacity: botControl?.hasPremium ? 1 : 0.55,
+                              }}
+                            >{t.projectStartServer}</button>
+                          )}
                           <button onClick={() => setConfirmDelete(project.id)} style={{ width: 36, height: 36, borderRadius: 11, background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.15)', color: '#f87171', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.background = 'rgba(248,113,113,0.2)'; }} onMouseLeave={e => { e.currentTarget.style.background = 'rgba(248,113,113,0.08)'; }}>✕</button>
                         </div>
                       )}
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             )}

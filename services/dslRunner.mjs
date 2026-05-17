@@ -16,6 +16,8 @@ const DSL_SANDBOX_MODE = String(
 const DSL_SANDBOX_NETWORK = String(process.env.DSL_SANDBOX_NETWORK || 'host').trim().toLowerCase();
 const DSL_MEDIA_DIR = path.resolve(process.env.DSL_MEDIA_DIR || '/var/www/cicada-studio/uploads/media');
 const SAFE_EXECUTABLE = /^(?:[a-zA-Z0-9_./:-]+)$/;
+// Node setTimeout uses a signed 32-bit delay (max ~24.8 days). Larger values clamp to 1ms and kill the bot instantly.
+const MAX_SETTIMEOUT_MS = 2_147_483_647;
 
 const runners = new Map(); // userId -> state
 const recentRunnerResults = new Map(); // userId -> { endedAt, reason, code, signal, logs }
@@ -207,6 +209,28 @@ function hardKill(state) {
   }, 1500).unref();
 }
 
+function remainingRunMs(state) {
+  if (state.runsUntil != null && Number.isFinite(state.runsUntil)) {
+    return Math.max(0, state.runsUntil - Date.now());
+  }
+  return Math.max(0, state.startedAt + state.timeoutMs - Date.now());
+}
+
+function scheduleRunnerTimeout(state, onEvent) {
+  clearTimeout(state.timeout);
+  const remaining = remainingRunMs(state);
+  if (remaining <= 0) {
+    onEvent?.('timeout', { userId: state.userId, mode: state.mode });
+    hardKill(state);
+    return;
+  }
+  const delay = Math.min(remaining, MAX_SETTIMEOUT_MS);
+  state.timeout = setTimeout(() => {
+    if (!runners.has(state.userId)) return;
+    scheduleRunnerTimeout(state, onEvent);
+  }, delay);
+}
+
 export function startRunner({
   userId,
   code,
@@ -220,10 +244,14 @@ export function startRunner({
   validateInputs(userId, code);
   if (!cicadaBin) throw new Error('CICADA_BIN is not configured');
 
-  const maxServerMs = Number(process.env.DSL_MAX_SERVER_RUNTIME_MS || 365 * 24 * 60 * 60 * 1000);
+  const maxServerMs = Math.min(
+    Number(process.env.DSL_MAX_SERVER_RUNTIME_MS || 365 * 24 * 60 * 60 * 1000),
+    MAX_SETTIMEOUT_MS,
+  );
   const runTimeoutMs = Math.min(
     Math.max(1000, Number.isFinite(Number(timeoutMsOverride)) ? Number(timeoutMsOverride) : MAX_RUNTIME_MS),
     mode === 'server' ? maxServerMs : MAX_RUNTIME_MS,
+    MAX_SETTIMEOUT_MS,
   );
 
   stopRunner(userId, { keepLog: false, reason: 'restart' });
@@ -267,10 +295,7 @@ export function startRunner({
   };
   runners.set(userId, state);
 
-  state.timeout = setTimeout(() => {
-    onEvent?.('timeout', { userId, mode: state.mode });
-    hardKill(state);
-  }, runTimeoutMs);
+  scheduleRunnerTimeout(state, onEvent);
 
   proc.stdout?.on('data', (chunk) => appendLog(state, chunk));
   proc.stderr?.on('data', (chunk) => appendLog(state, chunk));

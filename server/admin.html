@@ -1615,6 +1615,35 @@
         letter-spacing: 0.2em;
       }
     }
+
+    /* App dialog (replaces native confirm/alert/prompt) */
+    #app-dialog-host { display: none; position: fixed; inset: 0; z-index: 20000; background: rgba(2,1,12,0.72); backdrop-filter: blur(6px); align-items: center; justify-content: center; padding: 20px; }
+    #app-dialog-host.open { display: flex; }
+    .app-dialog-panel {
+      width: min(480px, 92vw); border-radius: 16px; overflow: hidden;
+      background: linear-gradient(160deg, rgba(22,18,38,0.97), rgba(12,10,24,0.98));
+      box-shadow: 0 30px 100px rgba(0,0,0,0.65);
+      animation: appDialogSlideIn 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .app-dialog-panel.variant-danger { border: 1px solid rgba(248,113,113,0.4); }
+    .app-dialog-panel.variant-warning { border: 1px solid rgba(251,191,36,0.4); }
+    .app-dialog-panel.variant-info { border: 1px solid rgba(96,165,250,0.35); }
+    .app-dialog-panel.variant-default { border: 1px solid rgba(62,207,142,0.35); }
+    .app-dialog-title { padding: 18px 22px; border-bottom: 1px solid rgba(255,255,255,0.08); font-family: Rajdhani, system-ui, sans-serif; font-weight: 700; font-size: 18px; letter-spacing: 0.02em; }
+    .app-dialog-panel.variant-danger .app-dialog-title { color: #fda4af; }
+    .app-dialog-panel.variant-warning .app-dialog-title { color: #fde68a; }
+    .app-dialog-panel.variant-info .app-dialog-title { color: #93c5fd; }
+    .app-dialog-panel.variant-default .app-dialog-title { color: #a7f3d0; }
+    .app-dialog-message { margin: 0; padding: 0 22px 18px; color: rgba(255,255,255,0.88); font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+    .app-dialog-input { width: calc(100% - 44px); margin: 0 22px 18px; padding: 11px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.14); background: rgba(0,0,0,0.35); color: #f8fafc; font-size: 14px; outline: none; box-sizing: border-box; display: block; }
+    .app-dialog-actions { padding: 0 22px 22px; display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+    .app-dialog-btn { padding: 10px 16px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; border: none; }
+    .app-dialog-btn-cancel { border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.92); }
+    .app-dialog-btn-confirm.variant-danger { background: linear-gradient(135deg,#fb7185,#ef4444); color: #fff; }
+    .app-dialog-btn-confirm.variant-warning { background: linear-gradient(135deg,#fbbf24,#f59e0b); color: #1a1208; }
+    .app-dialog-btn-confirm.variant-info { background: linear-gradient(135deg,#60a5fa,#3b82f6); color: #fff; }
+    .app-dialog-btn-confirm.variant-default { background: linear-gradient(135deg,#3ecf8e,#0ea5e9); color: #0a0f14; }
+    @keyframes appDialogSlideIn { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
   </style>
 </head>
 <body>
@@ -1905,6 +1934,19 @@
 <!-- Toast -->
 <div id="toast"></div>
 
+<!-- Styled dialog -->
+<div id="app-dialog-host" role="presentation">
+  <div class="app-dialog-panel variant-default" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+    <div class="app-dialog-title" id="app-dialog-title"></div>
+    <p class="app-dialog-message" id="app-dialog-message" style="display:none"></p>
+    <input class="app-dialog-input" id="app-dialog-input" type="text" style="display:none" />
+    <div class="app-dialog-actions">
+      <button type="button" class="app-dialog-btn app-dialog-btn-cancel" id="app-dialog-cancel" style="display:none">Отмена</button>
+      <button type="button" class="app-dialog-btn app-dialog-btn-confirm variant-default" id="app-dialog-confirm">OK</button>
+    </div>
+  </div>
+</div>
+
 <script>
   const API = '__API_TARGET__';
   let adminKey = '';
@@ -1918,6 +1960,84 @@
   let adminLogs = { apiErrors: [], authErrors: [], adminActions: [] };
   let supportRequests = [];
   const PRIMARY_ADMIN_EMAIL = 'denisbednakov@gmail.com';
+
+  function normalizeDialogOpts(input, defaults) {
+    if (typeof input === 'string') return Object.assign({}, defaults, { message: input, title: input });
+    return Object.assign({}, defaults, input || {});
+  }
+
+  function openAppDialog(opts) {
+    return new Promise(function(resolve) {
+      var host = document.getElementById('app-dialog-host');
+      var panel = host.querySelector('.app-dialog-panel');
+      var titleEl = document.getElementById('app-dialog-title');
+      var msgEl = document.getElementById('app-dialog-message');
+      var inputEl = document.getElementById('app-dialog-input');
+      var cancelBtn = document.getElementById('app-dialog-cancel');
+      var confirmBtn = document.getElementById('app-dialog-confirm');
+      var variant = opts.variant || 'default';
+      panel.className = 'app-dialog-panel variant-' + variant;
+      confirmBtn.className = 'app-dialog-btn app-dialog-btn-confirm variant-' + variant;
+      titleEl.textContent = opts.title || '';
+      if (opts.message) {
+        msgEl.textContent = opts.message;
+        msgEl.style.display = 'block';
+      } else {
+        msgEl.textContent = '';
+        msgEl.style.display = 'none';
+      }
+      var isPrompt = opts.kind === 'prompt';
+      var isConfirm = opts.kind === 'confirm' || isPrompt;
+      if (isPrompt) {
+        inputEl.style.display = 'block';
+        inputEl.value = opts.defaultValue || '';
+        inputEl.placeholder = opts.placeholder || '';
+        setTimeout(function() { inputEl.focus(); inputEl.select(); }, 0);
+      } else {
+        inputEl.style.display = 'none';
+      }
+      cancelBtn.style.display = isConfirm ? 'inline-block' : 'none';
+      cancelBtn.textContent = opts.cancelText || 'Отмена';
+      confirmBtn.textContent = opts.confirmText || 'OK';
+      function close(result) {
+        host.classList.remove('open');
+        host.onclick = null;
+        cancelBtn.onclick = null;
+        confirmBtn.onclick = null;
+        inputEl.onkeydown = null;
+        resolve(result);
+      }
+      cancelBtn.onclick = function() { close(isConfirm ? null : undefined); };
+      confirmBtn.onclick = function() {
+        if (isPrompt) close(inputEl.value);
+        else if (opts.kind === 'confirm') close(true);
+        else close(undefined);
+      };
+      inputEl.onkeydown = function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); close(inputEl.value); }
+      };
+      host.onclick = function(e) { if (e.target === host) close(isConfirm ? null : undefined); };
+      host.classList.add('open');
+    });
+  }
+
+  function appConfirm(input) {
+    return openAppDialog(normalizeDialogOpts(input, {
+      kind: 'confirm', title: 'Подтвердите действие', confirmText: 'OK', cancelText: 'Отмена', variant: 'default',
+    }));
+  }
+
+  function appAlert(input) {
+    return openAppDialog(normalizeDialogOpts(input, {
+      kind: 'alert', title: 'Сообщение', confirmText: 'OK', variant: 'info',
+    }));
+  }
+
+  function appPrompt(input) {
+    return openAppDialog(normalizeDialogOpts(input, {
+      kind: 'prompt', title: 'Введите значение', confirmText: 'OK', cancelText: 'Отмена', variant: 'default',
+    }));
+  }
 
   const AVATAR_COLORS = [
     'linear-gradient(135deg,#ffd700,#ff8c00)',
@@ -2608,7 +2728,7 @@
   }
 
   async function deleteSupportRequest(id) {
-    if (!confirm('Удалить обращение?')) return;
+    if (!(await appConfirm({ title: 'Удалить обращение?', message: 'Обращение будет удалено без возможности восстановления.', confirmText: 'Удалить', variant: 'danger' }))) return;
     try {
       var cr = await fetch(API + '/api/csrf-token', { credentials: 'include' });
       var ct = '';
@@ -2680,7 +2800,12 @@
   }
 
   async function applySystemUpdate() {
-    if (!confirm('Применить обновление? Будут выполнены: git pull, npm run build и pm2 restart.')) return;
+    if (!(await appConfirm({
+      title: 'Применить обновление?',
+      message: 'Будут выполнены: git pull, npm run build и pm2 restart.',
+      confirmText: 'Обновить',
+      variant: 'warning',
+    }))) return;
     try {
       showToast('Запуск обновления...', 'var(--accent)');
       var res = await apiPostJson(API + '/api/admin/update-apply', {});
@@ -2904,7 +3029,12 @@
   }
 
   async function revokeSubscription() {
-    if (!confirm('Снять PRO у этого пользователя?\nПлан станет trial, дата подписки обнулится.')) return;
+    if (!(await appConfirm({
+      title: 'Снять PRO?',
+      message: 'План станет trial, дата подписки обнулится.',
+      confirmText: 'Снять PRO',
+      variant: 'danger',
+    }))) return;
     var btn = document.getElementById('revoke-sub-btn');
     var grantBtn = document.getElementById('grant-btn');
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
@@ -3162,7 +3292,7 @@
   }
 
   async function adminUserResetPassword(userId) {
-    var pass = prompt('Новый пароль (мин. 6):');
+    var pass = await appPrompt({ title: 'Новый пароль', message: 'Минимум 6 символов', placeholder: '••••••' });
     if (!pass) return;
     var res = await apiPostJson(API + '/api/admin/user/reset-password', { userId: userId, newPassword: pass });
     var data = await res.json();
@@ -3171,7 +3301,7 @@
   }
 
   async function adminUserSetRole(userId) {
-    var role = prompt('Роль: user | moderator | admin');
+    var role = await appPrompt({ title: 'Роль пользователя', message: 'user | moderator | admin', defaultValue: 'user' });
     if (!role) return;
     var res = await apiPostJson(API + '/api/admin/user/role', { userId: userId, role: role.trim() });
     var data = await res.json();
@@ -3180,7 +3310,7 @@
   }
 
   async function adminUserSetAccess(userId) {
-    var accessLevel = prompt('Доступ: basic | pro | full');
+    var accessLevel = await appPrompt({ title: 'Уровень доступа', message: 'basic | pro | full', defaultValue: 'basic' });
     if (!accessLevel) return;
     var res = await apiPostJson(API + '/api/admin/user/access', { userId: userId, accessLevel: accessLevel.trim() });
     var data = await res.json();

@@ -1,5 +1,6 @@
 import React from 'react';
 import { apiFetch } from './apiClient.js';
+import { appAlert } from './dialog/appDialog.js';
 
 // ─── Map Picker Modal (OpenStreetMap + Leaflet) ──────────────────────────────
 function MapPickerModal({ initialLat, initialLon, onSelect, onClose }) {
@@ -301,7 +302,11 @@ export default function PropsPanel({ node, onChange, onDelete }) {
               if (data.type === 'document') next.filename = result.fileName || file.name || next.filename || '';
               onChange(id, next);
             } catch (err) {
-              alert('Не удалось загрузить файл: ' + (err?.message || 'ошибка'));
+              void appAlert({
+                title: 'Ошибка загрузки',
+                message: 'Не удалось загрузить файл: ' + (err?.message || 'ошибка'),
+                variant: 'danger',
+              });
             }
           }}
         />

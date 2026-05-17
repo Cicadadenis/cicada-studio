@@ -12,6 +12,7 @@ import {
   blockNoteForLang,
   RU_GROUP_TO_ID,
 } from '../builderI18n.js';
+import { appAlert } from '../dialog/appDialog.js';
 
 export const BLOCK_TYPES = [
   // Настройки (standalone, no stacking allowed as children)
@@ -2335,7 +2336,11 @@ function PropsPanel({
       onChangeRef.current(pendingUploadField, uploaded.filePath);
       if (pendingUploadField === 'url') onChangeRef.current('filename', uploaded.fileName || file.name || '');
     } catch (err) {
-      alert('Не удалось загрузить файл: ' + (err?.message || 'ошибка'));
+      void appAlert({
+        title: 'Ошибка загрузки',
+        message: 'Не удалось загрузить файл: ' + (err?.message || 'ошибка'),
+        variant: 'danger',
+      });
     }
   }, [pendingUploadField, isProjectMode, projectId]);
   const lang = ctx?.lang || 'ru';
@@ -2479,7 +2484,10 @@ function PropsPanel({
               {mapActive ? 'Закрыть карту' : 'Выбрать на карте'}
             </button>
             <button type="button" onClick={() => {
-              if (!navigator.geolocation) return alert('Геолокация не поддерживается');
+              if (!navigator.geolocation) {
+                void appAlert({ title: 'Геолокация', message: 'Геолокация не поддерживается', variant: 'warning' });
+                return;
+              }
               navigator.geolocation.getCurrentPosition((pos) => {
                 const lat = pos.coords.latitude.toFixed(6);
                 const lng = pos.coords.longitude.toFixed(6);
@@ -2491,7 +2499,13 @@ function PropsPanel({
                   mapRef.current.flyTo([lat, lng], 14);
                   setMapActive(true);
                 } catch (e) {}
-              }, (err) => alert('Не удалось определить позицию: ' + (err.message || err.code)));
+              }, (err) => {
+                void appAlert({
+                  title: 'Геолокация',
+                  message: 'Не удалось определить позицию: ' + (err.message || err.code),
+                  variant: 'danger',
+                });
+              });
             }} style={{ padding: '10px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
               Определить мою позицию
             </button>

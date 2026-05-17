@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { getCsrfTokenForRequest } from './csrf.js';
 import { getConstructorStrings } from './builderI18n.js';
 import { LIBRARY_CATEGORY_LABELS, LIBRARY_MODULE_LABELS } from './moduleLibraryBuiltinLabels.js';
+import { appAlert, appConfirm } from './dialog/appDialog.js';
 
 function normalizeUiLang(lang) {
   const lc = String(lang || 'ru').toLowerCase();
@@ -3934,7 +3935,14 @@ function ModuleLibraryModal({ onClose, onInsert, onUpgrade, currentUser, t = get
   };
 
   const handleDeleteLib = async (libId) => {
-    if (!confirm(t.libConfirmDeleteLibrary)) return;
+    const ok = await appConfirm({
+      title: 'Удалить библиотеку?',
+      message: t.libConfirmDeleteLibrary,
+      confirmText: 'Удалить',
+      cancelText: t.libCancel,
+      variant: 'danger',
+    });
+    if (!ok) return;
     await libFetch(`/libraries/${libId}`, { method: "DELETE" });
     setLibraries(prev => prev.filter(l => l.id !== libId));
     if (expandedLib === libId) setExpandedLib(null);
@@ -4425,12 +4433,12 @@ function ModuleLibraryModal({ onClose, onInsert, onUpgrade, currentUser, t = get
               <button
                 className="neo-lib-primary-btn"
                 onClick={() => {
-                  if (!currentUser) { alert(t.libAlertLogin); return; }
+                  if (!currentUser) { void appAlert({ title: t.libAlertLogin, message: t.libAlertLogin, variant: 'info' }); return; }
                   if (!isPro && libraries.length >= LIMIT) {
                     if (typeof onUpgrade === "function") {
                       onUpgrade();
                     } else {
-                      alert(t.libAlertTrialLimit(LIMIT));
+                      void appAlert({ title: t.libAlertTrialLimit(LIMIT), message: t.libAlertTrialLimit(LIMIT), variant: 'warning' });
                     }
                     return;
                   }

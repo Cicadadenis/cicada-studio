@@ -6,6 +6,7 @@ import InstructionsModal from './InstructionsModal.jsx';
 import LandingInfoModal from './landing/LandingInfoModal.jsx';
 import AuthModal from './auth/AuthModal.jsx';
 import ProfileModal from './profile/ProfileModal.jsx';
+import { appAlert, appConfirm } from './dialog/appDialog.js';
 import {
   BLOCK_TYPES,
   BLOCK_FOOTER_ACTION_TYPES,
@@ -109,6 +110,21 @@ async function loadProjectFromCloud(projectId) {
   } catch {
     return null;
   }
+}
+
+const SERVER_PROJECT_STORAGE_KEY = 'cicada_server_project_id';
+
+function generateDslFromStacks(stacks) {
+  const normalized = normalizeStudioStacks(stacks);
+  let dsl = '';
+  const hasBot = normalized.some((s) => s.blocks.some((b) => b.type === 'bot'));
+  if (!hasBot) {
+    dsl += 'бот "0000000000:PASTE_YOUR_BOTFATHER_TOKEN_HERE"\n\n';
+  }
+  normalized.forEach((stack) => {
+    dsl += stackToDSL(stack) + '\n\n';
+  });
+  return dsl.trim();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -741,6 +757,7 @@ export default function App() {
   const [projectName, setProjectName] = useState('');
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [botRunMode, setBotRunMode] = useState(null);
+  const [serverRunProjectId, setServerRunProjectId] = useState(null);
   const [showExamples, setShowExamples] = useState(false);
   /** Якорь кнопки «Примеры» — меню рендерим в portal, иначе перекрывается холстом / stacking context шапки */
   const examplesToggleRef = useRef(null);
@@ -835,7 +852,11 @@ export default function App() {
         body: JSON.stringify({}),
       });
     } catch (e) {
-      window.alert(e.message || 'Нет доступа к админке');
+      await appAlert({
+        title: 'Нет доступа',
+        message: e.message || 'Нет доступа к админке',
+        variant: 'warning',
+      });
       return;
     }
     const opened = window.open(target, '_blank');
@@ -3043,7 +3064,14 @@ const EXAMPLE_FULL = `версия "1.0"
       const myBot = list.find(b => b.userId === userId);
       if (myBot) {
         setIsBotRunning(true);
-        setBotRunMode(myBot.mode === 'server' ? 'server' : 'sandbox');
+        const serverMode = myBot.mode === 'server';
+        setBotRunMode(serverMode ? 'server' : 'sandbox');
+        if (serverMode) {
+          const storedProjectId = sessionStorage.getItem(SERVER_PROJECT_STORAGE_KEY);
+          setServerRunProjectId(storedProjectId || null);
+        } else {
+          setServerRunProjectId(null);
+        }
         if (myBot.mode === 'server' && myBot.runsUntil) {
           const remaining = Math.max(0, Math.floor((Number(myBot.runsUntil) - Date.now()) / 1000));
           if (remaining > 0) startCountdown(remaining);
@@ -3060,6 +3088,8 @@ const EXAMPLE_FULL = `версия "1.0"
       } else {
         setIsBotRunning(false);
         setBotRunMode(null);
+        setServerRunProjectId(null);
+        sessionStorage.removeItem(SERVER_PROJECT_STORAGE_KEY);
         if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
         setAutoStopSecondsLeft(null);
       }
@@ -3276,17 +3306,7 @@ const EXAMPLE_FULL = `версия "1.0"
   }, [checkBotStatus]);
 
   // Generate DSL from current stacks
-  const generateBotDSL = useCallback(() => {
-    let dsl = '';
-    const hasBot = stacks.some(s => s.blocks.some(b => b.type === 'bot'));
-    if (!hasBot) {
-      dsl += `бот "0000000000:PASTE_YOUR_BOTFATHER_TOKEN_HERE"\n\n`;
-    }
-    stacks.forEach(stack => {
-      dsl += stackToDSL(stack) + '\n\n';
-    });
-    return dsl.trim();
-  }, [stacks]);
+  const generateBotDSL = useCallback(() => generateDslFromStacks(stacks), [stacks]);
 
   const runPreviewStep = useCallback(
     async ({ text = '', callbackData = null, caption = '', document = null, photo = null }) => {
@@ -3518,7 +3538,7 @@ const EXAMPLE_FULL = `версия "1.0"
     return () => { cancelled = true; clearInterval(id); };
   }, [botDebugOpen, getRuntimeUserId]);
 
-  const runBot = useCallback(async (mode = 'sandbox') => {
+  const runBot = useCallback(async (mode = 'sandbox', options = {}) => {
     setIsStartingBot(true);
     setStartBotError(null);
     try {
@@ -3529,8 +3549,10 @@ const EXAMPLE_FULL = `версия "1.0"
         setStartBotError('Войдите в аккаунт, чтобы запустить бота');
         return;
       }
+      const serverProjectId = options.projectId ? String(options.projectId) : '';
       if (mode === 'server') {
-        if (!isProjectMode || !activeProjectId) {
+        const pid = serverProjectId || activeProjectId;
+        if (!pid) {
           setStartBotError(builderUi.startServerNeedsProject);
           return;
         }
@@ -3539,10 +3561,22 @@ const EXAMPLE_FULL = `версия "1.0"
           setStartBotError(builderUi.startServerNeedsPremium);
           return;
         }
+        if (isBotRunning && botRunMode === 'sandbox') {
+          setStartBotError('Сначала остановите 5‑минутный тест на холсте (кнопка «Стоп»).');
+          return;
+        }
       }
-      const code = generateBotDSL();
+      if (mode === 'sandbox' && isBotRunning && botRunMode === 'server') {
+        setStartBotError(builderUi.serverBlocksSandbox);
+        return;
+      }
+      const code = options.stacks
+        ? generateDslFromStacks(options.stacks)
+        : generateBotDSL();
       const payload = { code, userId, mode };
-      if (mode === 'server') payload.projectId = activeProjectId;
+      if (mode === 'server') {
+        payload.projectId = serverProjectId || activeProjectId;
+      }
       const response = await postJsonWithCsrf('/api/run', payload);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) {
@@ -3558,11 +3592,20 @@ const EXAMPLE_FULL = `версия "1.0"
         return;
       }
       setIsBotRunning(true);
-      setBotRunMode(data.mode === 'server' ? 'server' : 'sandbox');
+      const serverMode = data.mode === 'server';
+      setBotRunMode(serverMode ? 'server' : 'sandbox');
+      if (serverMode) {
+        const pid = serverProjectId || activeProjectId;
+        setServerRunProjectId(pid || null);
+        if (pid) sessionStorage.setItem(SERVER_PROJECT_STORAGE_KEY, pid);
+      } else {
+        setServerRunProjectId(null);
+        sessionStorage.removeItem(SERVER_PROJECT_STORAGE_KEY);
+      }
       setBotDebugLogs('');
       setBotDebugOpen(true);
       showToast(
-        data.mode === 'server' ? '☁ Бот запущен на сервере (Premium)' : '✅ Бот запущен: ' + (data.name || data.bot),
+        serverMode ? '☁ Бот запущен на сервере (Premium)' : '✅ Тест на 5 минут запущен',
         'success',
       );
       if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
@@ -3589,11 +3632,23 @@ const EXAMPLE_FULL = `версия "1.0"
     hasActiveProSubscription,
     builderUi.startServerNeedsProject,
     builderUi.startServerNeedsPremium,
+    builderUi.sandboxBlocksServer,
+    builderUi.serverBlocksSandbox,
     openPremiumPurchase,
+    isBotRunning,
+    botRunMode,
   ]);
 
   const startBot = useCallback(() => runBot('sandbox'), [runBot]);
   const startBotOnServer = useCallback(() => runBot('server'), [runBot]);
+  const startBotOnServerForProject = useCallback(async (projectId) => {
+    const project = await loadProjectFromCloud(projectId);
+    if (!project?.stacks) {
+      showToast('Не удалось загрузить проект', 'error');
+      return;
+    }
+    await runBot('server', { projectId, stacks: project.stacks });
+  }, [runBot, showToast]);
 
   // Stop bot
   const stopBot = useCallback(async () => {
@@ -3616,6 +3671,8 @@ const EXAMPLE_FULL = `версия "1.0"
       }
       setIsBotRunning(false);
       setBotRunMode(null);
+      setServerRunProjectId(null);
+      sessionStorage.removeItem(SERVER_PROJECT_STORAGE_KEY);
       if (autoStopIntervalRef.current) clearInterval(autoStopIntervalRef.current);
       setAutoStopSecondsLeft(null);
       showToast('⛔ Бот остановлен', 'info');
@@ -4506,26 +4563,18 @@ const EXAMPLE_FULL = `версия "1.0"
                 className="tb-btn tb-btn-run"
                 data-tour="run-desktop"
                 onClick={startBot}
-                disabled={!stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== ''))}
-                title={!stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== '')) ? builderUi.addBotTokenTitle : ''}
+                disabled={
+                  (isBotRunning && botRunMode === 'server')
+                  || !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== ''))
+                }
+                title={
+                  isBotRunning && botRunMode === 'server'
+                    ? builderUi.serverBlocksSandbox
+                    : !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== ''))
+                      ? builderUi.addBotTokenTitle
+                      : builderUi.start
+                }
               >{builderUi.start}</button>
-              {isProjectMode && (
-                <button
-                  className="tb-btn tb-btn-ghost"
-                  type="button"
-                  onClick={startBotOnServer}
-                  disabled={
-                    isStartingBot
-                    || !hasActiveProSubscription
-                    || !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token && b.props.token.trim() !== ''))
-                  }
-                  title={hasActiveProSubscription ? builderUi.projectFilesNote : builderUi.startServerNeedsPremium}
-                  style={{
-                    color: hasActiveProSubscription ? '#38bdf8' : 'rgba(148,163,184,0.6)',
-                    border: '1px solid rgba(56,189,248,0.35)',
-                  }}
-                >{builderUi.startOnServer}</button>
-              )}
               </>
             ) : (
               <div style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -5765,7 +5814,10 @@ const EXAMPLE_FULL = `версия "1.0"
                 type="button"
                 role="menuitem"
                 onClick={() => { startBot(); setMobileMoreOpen(false); }}
-                disabled={!stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim()))}
+                disabled={
+                  (isBotRunning && botRunMode === 'server')
+                  || !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim()))
+                }
                 style={{ width:'100%', padding:'10px 16px', textAlign:'left', background:'rgba(62,207,142,0.08)', color:'#3ecf8e', border:'none', cursor:'pointer', fontSize:13, fontFamily:'Syne,system-ui', fontWeight:700, display:'flex', alignItems:'center', gap:8, opacity: stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim())) ? 1 : 0.4 }}
               >{builderUi.mobileStartBot}</button>
             )}
@@ -5773,13 +5825,13 @@ const EXAMPLE_FULL = `версия "1.0"
               <button
                 type="button"
                 role="menuitem"
-                onClick={() => { startBotOnServer(); setMobileMoreOpen(false); }}
+                onClick={() => { setProfileInitialTab('projects'); setShowProfileModal(true); setMobileMoreOpen(false); }}
                 disabled={
                   !hasActiveProSubscription
                   || !stacks.some(s => s.blocks.some(b => b.type === 'bot' && b.props?.token?.trim()))
                 }
                 style={{ width:'100%', padding:'10px 16px', textAlign:'left', background:'rgba(56,189,248,0.08)', color:'#38bdf8', border:'none', cursor:'pointer', fontSize:13, fontFamily:'Syne,system-ui', fontWeight:700, display:'flex', alignItems:'center', gap:8, opacity: hasActiveProSubscription ? 1 : 0.45 }}
-              >☁ {builderUi.startOnServer}</button>
+              >☁ {builderUi.projectStartServer} · Проекты</button>
             )}
             <button
               type="button"
@@ -6311,11 +6363,17 @@ const EXAMPLE_FULL = `версия "1.0"
             }
           }}
           onDeleteProject={async (projectId) => {
-            if (confirm('Удалить проект?')) {
-              await deleteProject(projectId);
-              await loadUserProjects(currentUser.id);
-              showToast('Проект удалён', 'info');
-            }
+            const ok = await appConfirm({
+              title: 'Удалить проект?',
+              message: 'Проект и его данные будут удалены без возможности восстановления.',
+              confirmText: 'Удалить',
+              cancelText: 'Отмена',
+              variant: 'danger',
+            });
+            if (!ok) return;
+            await deleteProject(projectId);
+            await loadUserProjects(currentUser.id);
+            showToast('Проект удалён', 'info');
           }}
           onSaveToCloud={async (name) => {
             const n = name || projectName.trim() || 'Без названия';
@@ -6327,6 +6385,17 @@ const EXAMPLE_FULL = `версия "1.0"
           onOpenInstructions={() => setShowInstructions(true)}
           showToast={showToast}
           isMobile={isMobileView}
+          botControl={{
+            isRunning: isBotRunning,
+            mode: botRunMode,
+            serverProjectId: serverRunProjectId,
+            isStarting: isStartingBot,
+            isStopping: isStoppingBot,
+            hasPremium: hasActiveProSubscription,
+          }}
+          onStartBotOnServer={startBotOnServerForProject}
+          onStopBot={stopBot}
+          onOpenPremium={openPremiumPurchase}
         />
       )}
 
